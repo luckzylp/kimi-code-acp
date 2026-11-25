@@ -4,6 +4,7 @@ An independent [ACP](https://agentclientprotocol.com) agent for `@moonshot-ai/ki
 built on the upstream SDK at a **pinned tag** — no patches and no fork of their `acp` mode.
 
 Design: [`docs/adr/0001-run-model-and-projection.md`](docs/adr/0001-run-model-and-projection.md).
+Protocol coverage: [`docs/protocol-coverage.md`](docs/protocol-coverage.md).
 
 ## Why not the built-in `acp` mode
 
@@ -94,19 +95,26 @@ node packages/kimi-acp/dist/main.mjs login   # device-code flow in this terminal
 `node scripts/pack.mjs` produces what a client installs:
 
 ```
-build/moonshot-ai-kimi-code-acp-0.1.0.tgz     the publishable tarball
-build/npx-cache/npx/kimi-acp/
-  package.json                                pins @moonshot-ai/kimi-code-acp
+build/moonshot-ai-kimi-code-acp-<version>.tgz  the publishable tarball
+build/npx-cache/npx/kimi-acp/                  self-contained install
+  package.json                                 pins @moonshot-ai/kimi-code-acp
   package-lock.json
-  node_modules/@moonshot-ai/kimi-code-acp/    dist/main.mjs
-  node_modules/.bin/kimi-acp                  the shim Zed runs
+  node_modules/@moonshot-ai/kimi-code-acp/     dist/main.mjs
+  node_modules/.bin/kimi-acp                   the shim Zed runs
+build/npx-cache/kimi-code/                     the published CLI's own tree
+  package.json                                 pins @moonshot-ai/kimi-code
+  package-lock.json
+  node_modules/                                @moonshot-ai, @mariozechner,
+                                               qrcode, ws, chokidar, yargs, …
+  node_modules/@moonshot-ai/kimi-code/dist/main.mjs   our bundle replaces the CLI's
 ```
 
-That directory is the same shape as the npx cache Zed keeps for an agent, so it
-can be dropped into a registry cache as-is. The bundle is **self-contained** —
-the engine and the SDK are compiled into `dist/main.mjs` — so `node_modules`
-holds only `@moonshot-ai/kimi-code-acp`: there is nothing to resolve at run
-time, and no transitive tree to audit.
+Two shapes, one bundle. The first is a normal npm install of this adapter: the
+engine and the SDK are compiled into `dist/main.mjs`, so `node_modules` holds
+only `@moonshot-ai/kimi-code-acp` — nothing to resolve at run time. The second
+is the layout Zed keeps for `@moonshot-ai/kimi-code`'s npx cache: the published
+CLI and its dependency tree, with our bundle written over the CLI's
+`dist/main.mjs`, so that cache now serves ACP instead of the terminal UI.
 
 Point Zed at the installed bin (or at `packages/kimi-acp/dist/main.mjs`) as a
 custom agent command: `node <absolute path>`.

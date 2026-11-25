@@ -16,7 +16,7 @@
  * dropped into a registry cache as-is.
  */
 import { execFileSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -36,6 +36,9 @@ const cacheDir = join(buildDir, 'npx-cache', 'npx', 'kimi-acp');
 
 const NAME = '@moonshot-ai/kimi-code-acp';
 const { version } = JSON.parse(readFileSync(join(adapterRoot, 'package.json'), 'utf8'));
+/** Upstream version the overlay cache installs (the published CLI's dependency tree). */
+const upstreamTag = JSON.parse(readFileSync(join(repoRoot, 'upstream.json'), 'utf8')).tag;
+const upstreamVersion = String(upstreamTag).replace(/^@moonshot-ai\/kimi-code@/, '').replace(/^v/, '');
 
 function log(message) {
   process.stderr.write(`[pack] ${message}\n`);
@@ -132,6 +135,56 @@ try {
   rmSync(homeDir, { recursive: true, force: true });
   rmSync(workDir, { recursive: true, force: true });
 }
+
+// 5. The other install shape a client uses: the published CLI's own dependency
+// tree (qrcode, ws, chokidar and their transitive packages) with our bundle
+// replacing its `dist/main.mjs` — the layout Zed keeps for an npx agent.
+const overlayDir = join(buildDir, 'npx-cache', 'kimi-code');
+rmSync(overlayDir, { recursive: true, force: true });
+mkdirSync(overlayDir, { recursive: true });
+writeFileSync(
+  join(overlayDir, 'package.json'),
+  `${JSON.stringify(
+    {
+      name: 'kimi-code-cache',
+      private: true,
+      dependencies: { '@moonshot-ai/kimi-code': upstreamVersion },
+    },
+    null,
+    2,
+  )}\n`,
+);
+log(`overlay: installing @moonshot-ai/kimi-code@${upstreamVersion}`);
+npm(['install', '--no-audit', '--no-fund', '--ignore-scripts'], { cwd: overlayDir });
+
+const cliRoot = join(overlayDir, 'node_modules', '@moonshot-ai', 'kimi-code');
+const cliMain = join(cliRoot, 'dist', 'main.mjs');
+if (!existsSync(cliMain)) {
+  process.stderr.write(`[pack] the published CLI is missing its bundle: ${cliMain}\n`);
+  process.exit(1);
+}
+cpSync(distMain, cliMain);
+const overlayVersion = execFileSync(process.execPath, [cliMain, '--version'], { encoding: 'utf8' }).trim();
+if (!overlayVersion.includes(version)) {
+  process.stderr.write(`[pack] overlay bundle reports ${overlayVersion}, expected ${version}\n`);
+  process.exit(1);
+}
+const overlayHome = writeFakeHome();
+const overlayWork = mkdtempSync(join(tmpdir(), 'kimi-acp-overlay-'));
+const overlayAgent = spawnAgent(cliMain, { homeDir: overlayHome });
+try {
+  const init = await overlayAgent.request('initialize', { protocolVersion: 1, clientCapabilities: {} });
+  const created = await overlayAgent.request('session/new', { cwd: overlayWork, mcpServers: [] });
+  if (init.protocolVersion !== 1 || typeof created.sessionId !== 'string') {
+    throw new Error('the overlay agent failed the ACP handshake');
+  }
+} finally {
+  await overlayAgent.close();
+  rmSync(overlayHome, { recursive: true, force: true });
+  rmSync(overlayWork, { recursive: true, force: true });
+}
+const topLevel = readdirSync(join(overlayDir, 'node_modules')).filter((entry) => !entry.startsWith('.')).sort();
+log(`overlay ready: ${overlayDir} (${String(topLevel.length)} entries: ${topLevel.slice(0, 8).join(', ')}…)`);
 
 const entries = readFileSync(join(cacheDir, 'package-lock.json'), 'utf8').length;
 log(`npx cache ready: ${cacheDir} (package.json, package-lock.json, node_modules; lockfile ${entries} bytes)`);

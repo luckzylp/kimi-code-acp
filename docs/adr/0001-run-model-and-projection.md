@@ -1,6 +1,7 @@
 # ADR 0001 — Own ACP adapter, run model, and projection rules
 
 - **Status**: accepted; M0–M4 landed (protocol surface, sessions, prompt content, login, activity projections)
+- **Coverage audit**: [`../protocol-coverage.md`](../protocol-coverage.md)
 - **Verified**: M0 chain (tag → workspace → single-file bundle → engine session
   → turn → coalesced stream → cancel) — see [Verification](#verification)
 - **Date**: 2026-11-25
@@ -238,6 +239,7 @@ M0 was validated on 2026-11-25 against `@moonshot-ai/kimi-code@2.7.3`:
 | protocol cancel | `node scripts/e2e.mjs` | `$/cancel_request` cancels the prompt it names |
 | replay plan | `node scripts/e2e.mjs` | `session/load` restores the plan from the TodoList call in history |
 | install tree | `node scripts/pack.mjs` | 2.6 MB tarball, installed `node_modules` + lockfile, handshake from the installed copy |
+| npx-cache layout | `node scripts/pack.mjs` | `@moonshot-ai/kimi-code@2.7.3`'s dependency tree with our bundle over `dist/main.mjs`, handshake from that copy |
 
 Implementation notes worth keeping:
 
