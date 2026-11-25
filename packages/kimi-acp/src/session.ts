@@ -18,6 +18,7 @@ import type { SessionNotification, StopReason, ToolCallUpdate } from '@agentclie
 import type { Event, Session as KimiSession } from '@moonshot-ai/kimi-code-sdk';
 
 import { TextCoalescer } from './coalesce';
+import { describeEngineTurn } from './engine-turn';
 import { log } from './log';
 import { Outbox } from './outbox';
 import { ToolCalls } from './tool-calls';
@@ -72,6 +73,18 @@ export class SessionBridge {
     return this.options.sessionId;
   }
 
+  /** Post one notification through the ordered outbox (used by `session/load` replay). */
+  post(notification: SessionNotification): Promise<void> {
+    return this.outbox.push(notification);
+  }
+
+  /** Resolve once every queued update has been written. */
+  async flush(): Promise<void> {
+    this.assistant.flushNow();
+    this.thought.flushNow();
+    await this.outbox.drain();
+  }
+
   /** The card for a tool call awaiting approval, when it is one we already streamed. */
   pendingCall(toolCallId: string | undefined): ToolCallUpdate | undefined {
     return toolCallId === undefined ? undefined : this.toolCalls.pendingCall(toolCallId);
@@ -83,17 +96,65 @@ export class SessionBridge {
    * The engine acknowledges the submission before the run is over, so the
    * response comes from the events below, not from `prompt()` itself.
    */
-  prompt(text: string): Promise<StopReason> {
+  prompt(
+    text: string,
+    skill?: { readonly name: string; readonly args?: string },
+  ): Promise<StopReason> {
     if (this.run !== undefined && !this.run.settled) {
       return Promise.reject(new Error('a run is already in progress in this session'));
     }
     return new Promise<StopReason>((resolve, reject) => {
       const run: Run = { resolve, reject, settled: false, sawTurnEnd: false, grace: undefined };
       this.run = run;
-      this.options.session.prompt(text).catch((error: unknown) => {
+      const submission =
+        skill === undefined
+          ? this.options.session.prompt(text)
+          : this.options.session.promptWithSkills(text, [skill]);
+      submission.catch((error: unknown) => {
         this.fail(run, error);
       });
     });
+  }
+
+  /** Push `usage_update` from the engine's live context counters. */
+  async emitUsage(): Promise<void> {
+    try {
+      const status = await this.options.session.getStatus();
+      if (status.maxContextTokens <= 0) return;
+      await this.post({
+        sessionId: this.options.sessionId,
+        update: {
+          sessionUpdate: 'usage_update',
+          used: status.contextTokens,
+          size: status.maxContextTokens,
+        },
+      });
+    } catch (error) {
+      log.warn('acp: failed to push usage_update', { sessionId: this.sessionId, error: describe(error) });
+    }
+  }
+
+  /** Advertise the session's skills as slash commands. */
+  async emitCommands(): Promise<void> {
+    try {
+      const skills = await this.options.session.listSkills();
+      await this.post({
+        sessionId: this.options.sessionId,
+        update: {
+          sessionUpdate: 'available_commands_update',
+          availableCommands: skills.map((skill) => ({
+            name: skill.name,
+            description: skill.description,
+            input: { hint: 'arguments' },
+          })),
+        },
+      });
+    } catch (error) {
+      log.warn('acp: failed to push available_commands_update', {
+        sessionId: this.sessionId,
+        error: describe(error),
+      });
+    }
   }
 
   /** Ask the engine to stop the run. The turn's `cancelled` outcome settles it. */
@@ -119,6 +180,17 @@ export class SessionBridge {
         // A continuation turn proves the run is not finished after all.
         this.clearGrace();
         this.messageId = undefined;
+        if (this.run === undefined || this.run.settled) {
+          // Nobody prompted this turn: say what set the agent off (Decision 2.4).
+          // A turn inside a run is continuation bookkeeping and stays silent.
+          const note = describeEngineTurn(event.origin, event.prompt);
+          if (note !== undefined) {
+            void this.outbox.push({
+              sessionId: this.options.sessionId,
+              update: { sessionUpdate: 'user_message_chunk', content: { type: 'text', text: note } },
+            });
+          }
+        }
         return;
       }
       case 'assistant.delta': {
@@ -170,6 +242,15 @@ export class SessionBridge {
       case 'loop.idle': {
         const run = this.run;
         if (run !== undefined && !run.settled && run.sawTurnEnd) this.settle(run, 'end_turn');
+        return;
+      }
+      case 'session.meta.updated': {
+        if (typeof event.title === 'string' && event.title.length > 0) {
+          void this.outbox.push({
+            sessionId: this.options.sessionId,
+            update: { sessionUpdate: 'session_info_update', title: event.title },
+          });
+        }
         return;
       }
       case 'event.session.status_changed': {

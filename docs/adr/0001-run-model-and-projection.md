@@ -1,6 +1,6 @@
 # ADR 0001 — Own ACP adapter, run model, and projection rules
 
-- **Status**: accepted; M0 and M1 landed
+- **Status**: accepted; M0, M1 and M2 landed
 - **Verified**: M0 chain (tag → workspace → single-file bundle → engine session
   → turn → coalesced stream → cancel) — see [Verification](#verification)
 - **Date**: 2026-11-25
@@ -219,6 +219,9 @@ M0 was validated on 2026-11-25 against `@moonshot-ai/kimi-code@2.7.3`:
 | cancel | `node scripts/e2e.mjs` | mid-turn `session/cancel` → `cancelled` |
 | tool card | `node scripts/e2e.mjs` | `tool_call` with `_meta.terminal_info`, permission request answered |
 | shadow terminal | `node scripts/e2e.mjs` | `_meta.terminal_output` carries the command's output, `terminal_exit` = 0 |
+| session lifecycle | `node scripts/e2e.mjs` | `session/fork` returns a working session, `session/delete` removes it from `session/list` |
+| session surface | `node scripts/e2e.mjs` | model/thinking/mode options, `set_mode` (plan on/off), `set_config_option`, commands, usage |
+| load + replay | `node scripts/e2e.mjs` | second process loads the session, replays prompt/reply/tool card without injected context, accepts a new prompt |
 | install tree | `node scripts/pack.mjs` | 2.6 MB tarball, installed `node_modules` + lockfile, handshake from the installed copy |
 
 Implementation notes worth keeping:

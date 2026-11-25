@@ -14,9 +14,20 @@ functions that already carry eight local patches. See the ADR's alternatives.
 
 ## Status
 
-**M1 — usable single-session ACP agent, verified end to end.** Present today:
+**M2 — usable ACP agent with sessions and the client's session surface,
+verified end to end.** Present today:
 
-- `initialize`, `session/new`, `session/prompt`, `session/cancel`
+- `initialize`, `session/new`, `session/load`, `session/resume`,
+  `session/fork`, `session/list`, `session/delete`, `session/close`,
+  `session/prompt`, `session/cancel`
+- **history replay** on load: the persisted context becomes the same updates a
+  live turn produces, with injected reminders (`<system-reminder>`,
+  `<task-notification>`) stripped and engine-started turns introduced by the
+  same one-line note they get live
+- **session surface**: model / thinking / mode config options,
+  `session/set_config_option`, `session/set_mode`, skills advertised as slash
+  commands, `usage_update` after setup and each turn, and
+  `session_info_update` from generated titles
 - the **run** model: a prompt settles at quiescence (session idle, or a 2 s
   grace after the turn), not at `turn.ended`, so continuation turns stay
   inside the client's prompt
@@ -35,8 +46,9 @@ functions that already carry eight local patches. See the ADR's alternatives.
 - client capability negotiation (`terminal_output`, `terminal_output_delta`,
   `elicitation.form`, `fs.*`), read once at `initialize`
 
-M2 adds `session/load|resume|fork|list|delete`, replay filtering, and the
-goal/swarm projections — see the ADR's projection table.
+M3 adds prompt content beyond text (images, embedded context, resource links),
+client-supplied MCP servers, and the goal/swarm projections — see the ADR's
+projection table.
 
 ## Prerequisites
 

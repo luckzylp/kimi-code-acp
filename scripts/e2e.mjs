@@ -176,7 +176,209 @@ async function terminalScenario() {
   });
 }
 
+/** Poll until `predicate` holds or the timeout expires. */
+async function waitFor(predicate, timeoutMs, what) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 25));
+  }
+  throw new Error(`timed out waiting for ${what}`);
+}
+
+/**
+ * The session surface a client renders: config options (model, thinking, mode),
+ * modes, slash commands and the context indicator.
+ */
+async function surfaceScenario() {
+  await withAgent({ script: [{ kind: 'text', text: 'ok' }] }, async ({ agent, workDir }) => {
+    await agent.request('initialize', { protocolVersion: 1, clientCapabilities: {} });
+    const created = await agent.request('session/new', { cwd: workDir, mcpServers: [] });
+    if (typeof created.sessionId !== 'string') throw new Error('session/new returned no sessionId');
+    const ids = (created.configOptions ?? []).map((option) => option.id);
+    for (const expected of ['model', 'thinking', 'mode']) {
+      if (!ids.includes(expected)) throw new Error(`session/new config options lack "${expected}": ${ids.join(', ')}`);
+    }
+    if (created.modes === undefined || typeof created.modes.currentModeId !== 'string') {
+      throw new Error('session/new returned no mode state');
+    }
+    ok(`config options ${ids.join(', ')}; mode ${created.modes.currentModeId}`);
+
+    await waitFor(
+      () => updates(agent).some((update) => update.sessionUpdate === 'available_commands_update'),
+      5_000,
+      'available_commands_update',
+    );
+    await waitFor(
+      () => updates(agent).some((update) => update.sessionUpdate === 'usage_update'),
+      5_000,
+      'usage_update',
+    );
+    ok('commands and usage arrived after the response');
+
+    await agent.request('session/set_mode', { sessionId: created.sessionId, modeId: 'plan' });
+    const modeUpdates = updates(agent).filter((update) => update.sessionUpdate === 'current_mode_update');
+    if (modeUpdates.at(-1)?.currentModeId !== 'plan') throw new Error('set_mode did not switch to plan');
+    await agent.request('session/set_mode', { sessionId: created.sessionId, modeId: 'default' });
+    ok('session/set_mode switched plan mode on and off');
+
+    const modelOption = created.configOptions.find((option) => option.id === 'model');
+    const model = modelOption.currentValue;
+    const configured = await agent.request('session/set_config_option', {
+      sessionId: created.sessionId,
+      configId: 'model',
+      value: model,
+    });
+    const applied = (configured.configOptions ?? []).find((option) => option.id === 'model');
+    if (applied?.currentValue !== model) throw new Error('set_config_option did not keep the model');
+    if (!updates(agent).some((update) => update.sessionUpdate === 'config_option_update')) {
+      throw new Error('set_config_option posted no config_option_update');
+    }
+    ok(`session/set_config_option applied model ${String(model)}`);
+
+    const usageBefore = updates(agent).filter((update) => update.sessionUpdate === 'usage_update').length;
+    await agent.request('session/prompt', { sessionId: created.sessionId, prompt: [{ type: 'text', text: 'hi' }] }, 60_000);
+    await waitFor(
+      () => updates(agent).filter((update) => update.sessionUpdate === 'usage_update').length > usageBefore,
+      5_000,
+      'usage_update after the turn',
+    );
+    ok('usage_update refreshed after the turn');
+  });
+}
+
+/**
+ * `session/fork` and `session/delete`: a fork is a new engine session that
+ * accepts prompts, and deleting it removes it from the listing.
+ */
+async function lifecycleScenario() {
+  await withAgent(
+    { script: [{ kind: 'text', text: 'one' }, { kind: 'text', text: 'two' }] },
+    async ({ agent, workDir }) => {
+      const sessionId = await newSession(agent, workDir);
+      await agent.request(
+        'session/prompt',
+        { sessionId, prompt: [{ type: 'text', text: 'first' }] },
+        60_000,
+      );
+      const forked = await agent.request('session/fork', { sessionId, cwd: workDir, mcpServers: [] });
+      if (typeof forked.sessionId !== 'string' || forked.sessionId === sessionId) {
+        throw new Error('session/fork did not return a new session');
+      }
+      ok(`session/fork → ${forked.sessionId}`);
+
+      const response = await agent.request(
+        'session/prompt',
+        { sessionId: forked.sessionId, prompt: [{ type: 'text', text: 'second' }] },
+        60_000,
+      );
+      if (response.stopReason !== 'end_turn') throw new Error('the forked session did not accept a prompt');
+      ok('the forked session accepted a prompt');
+
+      const before = await agent.request('session/list', {});
+      if (!before.sessions.some((entry) => entry.sessionId === forked.sessionId)) {
+        throw new Error('session/list does not include the fork');
+      }
+      await agent.request('session/delete', { sessionId: forked.sessionId });
+      const after = await agent.request('session/list', {});
+      if (after.sessions.some((entry) => entry.sessionId === forked.sessionId)) {
+        throw new Error('session/delete left the fork in the listing');
+      }
+      ok('session/delete removed the fork from the listing');
+    },
+  );
+}
+
+/**
+ * Persistence and `session/load`: a second process reopens the session, the
+ * adapter replays its history as updates (stripping injected reminders), and
+ * the resumed session accepts a new prompt.
+ */
+async function loadScenario() {
+  const command = 'echo replay-hello';
+  const provider = await startFakeProvider({
+    script: [
+      { kind: 'tool', id: 'call_replay', name: 'Bash', arguments: JSON.stringify({ command }) },
+      { kind: 'text', text: 'first reply' },
+      { kind: 'text', text: 'resumed reply' },
+    ],
+  });
+  const homeDir = writeFakeHome({ baseUrl: provider.baseUrl });
+  const workDir = mkdtempSync(join(tmpdir(), 'kimi-acp-work-'));
+  let sessionId;
+  const first = spawnAgent(mainPath, { homeDir });
+  try {
+    await first.request('initialize', { protocolVersion: 1, clientCapabilities: {} });
+    first.onRequest('session/request_permission', () => ({
+      outcome: { outcome: 'selected', optionId: 'approve_once' },
+    }));
+    const created = await first.request('session/new', { cwd: workDir, mcpServers: [] });
+    sessionId = created.sessionId;
+    const response = await first.request(
+      'session/prompt',
+      { sessionId, prompt: [{ type: 'text', text: 'run the replay command' }] },
+      120_000,
+    );
+    if (response.stopReason !== 'end_turn') throw new Error('first process did not finish its turn');
+  } finally {
+    await first.close();
+  }
+
+  const second = spawnAgent(mainPath, { homeDir });
+  try {
+    const init = await second.request('initialize', { protocolVersion: 1, clientCapabilities: {} });
+    if (init.agentCapabilities?.loadSession !== true) throw new Error('loadSession is not advertised');
+
+    const listed = await second.request('session/list', {});
+    if (!listed.sessions.some((entry) => entry.sessionId === sessionId)) {
+      throw new Error('session/list does not include the created session');
+    }
+    ok(`session/list → ${listed.sessions.length} session(s), including ${sessionId}`);
+
+    await second.request('session/load', { sessionId, cwd: workDir, mcpServers: [] }, 120_000);
+    const replayed = second.sessionUpdates();
+    const text = replayed
+      .filter((update) => update.sessionUpdate === 'user_message_chunk' || update.sessionUpdate === 'agent_message_chunk')
+      .map((update) => update.content?.text ?? '')
+      .join('\n');
+    if (!text.includes('run the replay command')) throw new Error('replay lost the user prompt');
+    if (!text.includes('first reply')) throw new Error('replay lost the assistant reply');
+    if (text.includes('<system-reminder>') || text.includes('<task-notification>')) {
+      throw new Error('replay leaked injected context');
+    }
+    const cards = replayed.filter((update) => update.sessionUpdate === 'tool_call');
+    if (cards.length === 0) throw new Error('replay lost the tool card');
+    const completed = replayed.filter(
+      (update) => update.sessionUpdate === 'tool_call_update' && update.status === 'completed',
+    );
+    if (completed.length === 0) throw new Error('replay lost the tool result');
+    ok(`session/load replayed ${replayed.length} update(s): prompt, reply, tool card and result`);
+
+    const response = await second.request(
+      'session/prompt',
+      { sessionId, prompt: [{ type: 'text', text: 'continue' }] },
+      120_000,
+    );
+    if (response.stopReason !== 'end_turn') throw new Error('the resumed session did not accept a prompt');
+    const reply = second
+      .sessionUpdates()
+      .filter((update) => update.sessionUpdate === 'agent_message_chunk')
+      .map((update) => update.content?.text ?? '')
+      .join('');
+    if (!reply.includes('resumed reply')) throw new Error('the resumed session did not stream its reply');
+    ok('the resumed session accepted a prompt and streamed its reply');
+  } finally {
+    await second.close();
+    await provider.close();
+    rmSync(homeDir, { recursive: true, force: true });
+    rmSync(workDir, { recursive: true, force: true });
+  }
+}
+
 await turnScenario();
 await cancelScenario();
 await terminalScenario();
-ok('M1 end-to-end: turn, stream, cancel, tool card, shadow terminal');
+await surfaceScenario();
+await lifecycleScenario();
+await loadScenario();
+ok('M1 end-to-end: turn, stream, cancel, tool card, shadow terminal, load');
