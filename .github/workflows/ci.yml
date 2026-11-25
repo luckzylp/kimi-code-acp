@@ -34,6 +34,9 @@ jobs:
       - name: Type-check the adapter
         run: node scripts/typecheck.mjs
 
+      - name: Unit tests
+        run: node scripts/test.mjs
+
       - name: Build the bundle
         run: node scripts/build.mjs
 

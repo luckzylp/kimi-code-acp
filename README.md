@@ -35,6 +35,9 @@ verified end to end.** Present today:
 - **login**: `kimi-acp login` runs the device-code flow in a terminal and is
   advertised as ACP's `terminal` auth method, so a client can start it from its
   sign-in UI; `authenticate` / `logout` are handled too
+- **activity the engine does not express as tool calls**: `TodoList` becomes
+  the session's `plan`; goals, subagents and compaction become synthetic cards
+  and one-line notices (`src/activity.ts`, unit-tested)
 - the **run** model: a prompt settles at quiescence (session idle, or a 2 s
   grace after the turn), not at `turn.ended`, so continuation turns stay
   inside the client's prompt
@@ -53,9 +56,8 @@ verified end to end.** Present today:
 - client capability negotiation (`terminal_output`, `terminal_output_delta`,
   `elicitation.form`, `fs.*`), read once at `initialize`
 
-M4 adds client-supplied MCP servers (not exposed by the SDK today — see the
-ADR) and the goal/swarm projections; both are recorded in the ADR's projection
-table.
+The remaining gap is client-supplied MCP servers (not exposed by the SDK
+today — see the ADR's known limitations).
 
 ## Prerequisites
 

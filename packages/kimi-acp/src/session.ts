@@ -17,6 +17,17 @@ import { randomUUID } from 'node:crypto';
 import type { SessionNotification, StopReason, ToolCallUpdate } from '@agentclientprotocol/sdk';
 import type { Event, PromptPart, Session as KimiSession } from '@moonshot-ai/kimi-code-sdk';
 
+import {
+  goalCard,
+  goalChange,
+  goalCleared,
+  notice,
+  planNotification,
+  subagentCard,
+  subagentUpdate,
+  type GoalSnapshotLike,
+  type SubagentSpawnedLike,
+} from './activity';
 import { TextCoalescer } from './coalesce';
 import { describeEngineTurn } from './engine-turn';
 import { log } from './log';
@@ -51,6 +62,8 @@ export class SessionBridge {
   private readonly unsubscribe: () => void;
   private run: Run | undefined;
   private messageId: string | undefined;
+  /** The goal currently on screen, so changes update its card instead of adding one. */
+  private goalId: string | undefined;
 
   constructor(private readonly options: SessionBridgeOptions) {
     this.outbox = new Outbox((notification) => options.send(notification as SessionNotification));
@@ -202,6 +215,10 @@ export class SessionBridge {
         return;
       }
       case 'tool.call.started': {
+        if (event.display?.kind === 'todo_list') {
+          const plan = planNotification(this.options.sessionId, event.display.items);
+          if (plan !== null) void this.outbox.push(plan);
+        }
         this.toolCalls.started(event);
         return;
       }
@@ -242,6 +259,87 @@ export class SessionBridge {
       case 'loop.idle': {
         const run = this.run;
         if (run !== undefined && !run.settled && run.sawTurnEnd) this.settle(run, 'end_turn');
+        return;
+      }
+      case 'goal.updated': {
+        const snapshot = event.snapshot as GoalSnapshotLike | null | undefined;
+        if (snapshot === null || snapshot === undefined) {
+          if (this.goalId !== undefined) {
+            void this.outbox.push(goalCleared(this.options.sessionId, this.goalId, 'Goal cleared.'));
+            this.goalId = undefined;
+          }
+          return;
+        }
+        if (this.goalId === snapshot.goalId) {
+          void this.outbox.push(goalChange(this.options.sessionId, snapshot));
+        } else {
+          void this.outbox.push(goalCard(this.options.sessionId, snapshot));
+          this.goalId = snapshot.goalId;
+        }
+        return;
+      }
+      case 'subagent.spawned': {
+        void this.outbox.push(subagentCard(this.options.sessionId, event as unknown as SubagentSpawnedLike));
+        return;
+      }
+      case 'subagent.started': {
+        void this.outbox.push(subagentUpdate(this.options.sessionId, event.subagentId, 'in_progress', undefined));
+        return;
+      }
+      case 'subagent.completed': {
+        void this.outbox.push(
+          subagentUpdate(
+            this.options.sessionId,
+            event.subagentId,
+            'completed',
+            event.resultSummary.length > 0 ? event.resultSummary : 'Subagent finished.',
+          ),
+        );
+        return;
+      }
+      case 'subagent.failed': {
+        void this.outbox.push(
+          subagentUpdate(this.options.sessionId, event.subagentId, 'failed', event.error),
+        );
+        return;
+      }
+      case 'subagent.cancelled': {
+        void this.outbox.push(
+          subagentUpdate(this.options.sessionId, event.subagentId, 'failed', 'Subagent cancelled.'),
+        );
+        return;
+      }
+      case 'compaction.started': {
+        const instruction = event.instruction;
+        void this.outbox.push(
+          notice(
+            this.options.sessionId,
+            instruction === undefined || instruction.length === 0
+              ? 'Compacting conversation context…'
+              : `Compacting conversation context with instruction: ${instruction}`,
+          ),
+        );
+        return;
+      }
+      case 'compaction.completed': {
+        const result = event.result as
+          | { readonly compactedCount?: number; readonly tokensBefore?: number; readonly tokensAfter?: number }
+          | undefined;
+        const lines = ['Compaction completed.'];
+        if (typeof result?.compactedCount === 'number') lines.push(`- Messages compacted: ${String(result.compactedCount)}`);
+        if (typeof result?.tokensBefore === 'number') lines.push(`- Tokens before: ${String(result.tokensBefore)}`);
+        if (typeof result?.tokensAfter === 'number') lines.push(`- Tokens after: ${String(result.tokensAfter)}`);
+        void this.outbox.push(notice(this.options.sessionId, lines.join('\n')));
+        return;
+      }
+      case 'compaction.cancelled': {
+        void this.outbox.push(notice(this.options.sessionId, 'Compaction cancelled.'));
+        return;
+      }
+      case 'compaction.blocked': {
+        void this.outbox.push(
+          notice(this.options.sessionId, 'Compaction is blocked by the current turn; retry when the turn is idle.'),
+        );
         return;
       }
       case 'session.meta.updated': {

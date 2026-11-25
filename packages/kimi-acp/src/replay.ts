@@ -19,6 +19,7 @@
  */
 import type { SessionNotification } from '@agentclientprotocol/sdk';
 
+import { goalCard, type GoalSnapshotLike } from './activity';
 import { describeEngineTurn, isAutonomousOrigin } from './engine-turn';
 import { resultContent, toolKind } from './tool-calls';
 
@@ -50,6 +51,8 @@ interface ReplayMessage {
 export interface ReplayRecord {
   readonly type: string;
   readonly message?: ReplayMessage;
+  /** Present on `goal_updated` records. */
+  readonly snapshot?: GoalSnapshotLike | null;
 }
 
 /** Markers that wrap context nobody typed: reminders, task notices, local commands. */
@@ -94,6 +97,12 @@ export function projectReplay(
   const toolCallTurns = new Map<string, number>();
 
   for (const record of records) {
+    if (record.type === 'goal_updated') {
+      if (record.snapshot !== null && record.snapshot !== undefined) {
+        out.push(goalCard(sessionId, record.snapshot));
+      }
+      continue;
+    }
     if (record.type !== 'message') continue;
     const message = record.message;
     if (message === undefined) continue;

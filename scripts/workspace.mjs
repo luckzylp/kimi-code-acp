@@ -14,7 +14,7 @@ import { join } from 'node:path';
 import { pnpmStoreArgs, runPnpm } from './toolchain.mjs';
 
 /** Files that belong to the adapter package, relative to its root. */
-const PACKAGE_ENTRIES = ['package.json', 'tsconfig.json', 'tsdown.config.ts', 'src'];
+const PACKAGE_ENTRIES = ['package.json', 'tsconfig.json', 'tsdown.config.ts', 'vitest.config.ts', 'src', 'test'];
 
 export function workspaceAdapterDir(repoRoot) {
   return join(repoRoot, 'vendor', 'upstream', 'packages', 'kimi-acp');

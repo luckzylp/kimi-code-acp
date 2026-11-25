@@ -1,6 +1,6 @@
 # ADR 0001 — Own ACP adapter, run model, and projection rules
 
-- **Status**: accepted; M0–M3 landed (protocol surface, sessions, prompt content, login)
+- **Status**: accepted; M0–M4 landed (protocol surface, sessions, prompt content, login, activity projections)
 - **Verified**: M0 chain (tag → workspace → single-file bundle → engine session
   → turn → coalesced stream → cancel) — see [Verification](#verification)
 - **Date**: 2026-11-25
@@ -200,7 +200,6 @@ Risks:
   `harness.addMcpServer` writes the user's global config. The adapter logs and
   ignores them rather than mutating configuration; the engine's own MCP config
   still applies.
-- **Goal / swarm projections** are designed (Decision 4) but not implemented.
 
 ## Alternatives rejected
 
@@ -234,6 +233,8 @@ M0 was validated on 2026-11-25 against `@moonshot-ai/kimi-code@2.7.3`:
 | prompt content | `node scripts/e2e.mjs` | an image reaches the model request as a data URL, a linked markdown file is inlined |
 | cancel in a dialog | `node scripts/e2e.mjs` | cancelling with an open permission request settles the run as `cancelled` |
 | login wiring | `node scripts/e2e.mjs` | `initialize` advertises the terminal `login` method; unknown methods are rejected |
+| plan projection | `node scripts/e2e.mjs` | a `TodoList` call becomes a `plan` with completed/in_progress/pending entries |
+| goal / subagent cards | `node scripts/test.mjs` | unit tests cover card ids, lifecycle status mapping, budget text, subagent states |
 | install tree | `node scripts/pack.mjs` | 2.6 MB tarball, installed `node_modules` + lockfile, handshake from the installed copy |
 
 Implementation notes worth keeping:

@@ -295,6 +295,42 @@ async function cancelDuringPermissionScenario() {
   );
 }
 
+/** A TodoList call becomes the session's ACP plan (Zed's todo list). */
+async function planScenario() {
+  const script = [
+    {
+      kind: 'tool',
+      id: 'call_todo',
+      name: 'TodoList',
+      arguments: JSON.stringify({
+        todos: [
+          { title: 'write the tests', status: 'done' },
+          { title: 'ship it', status: 'in_progress' },
+          { title: 'tell the user', status: 'pending' },
+        ],
+      }),
+    },
+    { kind: 'text', text: 'noted' },
+  ];
+  await withAgent({ script }, async ({ agent, workDir }) => {
+    const sessionId = await newSession(agent, workDir);
+    const response = await agent.request(
+      'session/prompt',
+      { sessionId, prompt: [{ type: 'text', text: 'plan the work' }] },
+      120_000,
+    );
+    if (response.stopReason !== 'end_turn') throw new Error('the plan turn did not finish');
+    const plan = updates(agent).find((update) => update.sessionUpdate === 'plan');
+    if (plan === undefined) throw new Error('TodoList produced no plan update');
+    const entries = plan.entries ?? [];
+    const byContent = new Map(entries.map((entry) => [entry.content, entry.status]));
+    if (byContent.get('write the tests') !== 'completed') throw new Error('done step was not completed');
+    if (byContent.get('ship it') !== 'in_progress') throw new Error('active step was not in_progress');
+    if (byContent.get('tell the user') !== 'pending') throw new Error('pending step was not pending');
+    ok(`TodoList projected as a plan (${String(entries.length)} entries)`);
+  });
+}
+
 /**
  * Prompt content beyond text: an image is attached to the engine's media store
  * and a linked markdown file is read on the host and inlined.
@@ -466,6 +502,7 @@ await cancelScenario();
 await terminalScenario();
 await surfaceScenario();
 await promptContentScenario();
+await planScenario();
 await cancelDuringPermissionScenario();
 await lifecycleScenario();
 await loadScenario();
