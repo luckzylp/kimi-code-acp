@@ -1,7 +1,14 @@
 /**
- * The ACP agent surface (ADR 0001). M0: initialize, session/new, session/prompt,
- * session/cancel. Tool projection, display terminals, permissions, load/replay
- * and the goal/swarm projections are added on top of these seams.
+ * The ACP agent surface (ADR 0001).
+ *
+ * M0: initialize, session/new, session/prompt, session/cancel, the run model.
+ * M1: tool cards, shadow terminals for commands, permission requests, and
+ * elicitation for the engine's questions.
+ *
+ * Tool execution belongs to the agent (the engine), never to the client: the
+ * client renders a card and, for commands, a terminal fed through `_meta`.
+ * That removes the whole `terminal/*` reverse-RPC failure class — a dropped
+ * client terminal can no longer pin a turn.
  */
 import {
   agent,
@@ -14,13 +21,19 @@ import {
   type NewSessionResponse,
   type PromptRequest,
   type PromptResponse,
+  type RequestPermissionRequest,
+  type RequestPermissionResponse,
+  type CreateElicitationRequest,
+  type CreateElicitationResponse,
+  methods,
   RequestError,
 } from '@agentclientprotocol/sdk';
-import { createKimiHarness, type KimiHarness } from '@moonshot-ai/kimi-code-sdk';
+import { createKimiHarness, type KimiHarness, type Session as KimiSession } from '@moonshot-ai/kimi-code-sdk';
 
 import { readClientCapabilities, type ClientCapabilities } from './capabilities';
 import { log } from './log';
 import { SessionBridge } from './session';
+import { toolKind } from './tool-calls';
 import { AGENT_NAME, VERSION } from './version';
 
 /** ACP protocol version this adapter speaks. Zed negotiates down from v2 on its own. */
@@ -82,7 +95,10 @@ async function newSession(state: AgentState, params: NewSessionRequest): Promise
   const config = await harness.getConfig();
   const model = config.defaultModel;
   if (model === undefined) {
-    throw RequestError.authRequired(undefined, 'No model configured. Run `kimi` once to log in, or set default_model in config.toml.');
+    throw RequestError.authRequired(
+      undefined,
+      'No model configured. Run `kimi` once to log in, or set default_model in config.toml.',
+    );
   }
   const session = await harness.createSession({ workDir: params.cwd, model });
   const client = state.client;
@@ -90,11 +106,105 @@ async function newSession(state: AgentState, params: NewSessionRequest): Promise
   const bridge = new SessionBridge({
     sessionId: session.id,
     session,
-    send: (notification) => client.notify('session/update', notification),
+    shadowTerminals: state.capabilities.terminalOutput,
+    send: (notification) => client.notify(methods.client.session.update, notification),
   });
+  wireApprovals(state, bridge, session);
+  wireQuestions(state, bridge, session);
   state.bridges.set(session.id, bridge);
   log.info('acp: session created', { sessionId: session.id, cwd: params.cwd, model });
   return { sessionId: session.id };
+}
+
+/**
+ * The engine asks before a tool runs; ACP asks the client. The answer decides
+ * the tool call: approved, approved for the session, rejected, or cancelled
+ * when the turn is cancelled while the dialog is open.
+ */
+function wireApprovals(state: AgentState, bridge: SessionBridge, session: KimiSession): void {
+  session.setApprovalHandler(async (request) => {
+    const client = state.client;
+    if (client === undefined) return { decision: 'cancelled' };
+    const toolCall = bridge.pendingCall(request.toolCallId) ?? {
+      toolCallId: `${request.turnId ?? 0}:${request.toolCallId ?? 'unknown'}`,
+      title: request.action,
+      kind: toolKind(request.toolName),
+      status: 'pending' as const,
+    };
+    const options = [
+      { optionId: 'approve_once', name: 'Approve once', kind: 'allow_once' as const },
+      { optionId: 'approve_session', name: 'Approve for this session', kind: 'allow_always' as const },
+      { optionId: 'reject_once', name: 'Reject', kind: 'reject_once' as const },
+    ];
+    const response = await client.request<RequestPermissionResponse, RequestPermissionRequest>(
+      methods.client.session.requestPermission,
+      { sessionId: bridge.sessionId, toolCall, options },
+    );
+    const outcome = response.outcome;
+    if (outcome.outcome === 'cancelled') return { decision: 'cancelled' };
+    if (outcome.optionId === 'approve_once') return { decision: 'approved' };
+    if (outcome.optionId === 'approve_session') return { decision: 'approved', scope: 'session' };
+    return { decision: 'rejected' };
+  });
+}
+
+/** The engine asks the user a question; ACP elicits a form, or a permission-style choice. */
+function wireQuestions(state: AgentState, bridge: SessionBridge, session: KimiSession): void {
+  session.setQuestionHandler(async (request) => {
+    const client = state.client;
+    const question = request.questions[0];
+    if (client === undefined || question === undefined) return null;
+    if (state.capabilities.elicitationForm) {
+      const labels = question.options.map((option) => option.label);
+      const response = await client.request<CreateElicitationResponse, CreateElicitationRequest>(
+        methods.client.elicitation.create,
+        {
+          sessionId: bridge.sessionId,
+          ...(request.toolCallId === undefined ? {} : { toolCallId: request.toolCallId }),
+          mode: 'form',
+          message: question.question,
+          requestedSchema: {
+            type: 'object',
+            properties: {
+              answer: {
+                type: 'string',
+                title: question.header ?? 'Answer',
+                ...(question.body === undefined ? {} : { description: question.body }),
+                ...(labels.length === 0 ? {} : { enum: labels }),
+              },
+            },
+            required: ['answer'],
+          },
+        },
+      );
+      if (response.action !== 'accept') return null;
+      const answer = (response.content as Record<string, unknown> | undefined)?.['answer'];
+      return typeof answer === 'string' ? { [question.question]: answer } : null;
+    }
+    if (question.options.length === 0) return null;
+    // No form support: ask as a choice, which every ACP client can render.
+    const response = await client.request<RequestPermissionResponse, RequestPermissionRequest>(
+      methods.client.session.requestPermission,
+      {
+        sessionId: bridge.sessionId,
+        toolCall: {
+          toolCallId: `question:${request.id ?? 'unknown'}`,
+          title: question.question,
+          kind: 'other',
+          status: 'pending',
+        },
+        options: question.options.map((option, index) => ({
+          optionId: `option_${index}`,
+          name: option.label,
+          kind: 'allow_once' as const,
+        })),
+      },
+    );
+    if (response.outcome.outcome !== 'selected') return null;
+    const index = Number(response.outcome.optionId.replace('option_', ''));
+    const selected = question.options[index];
+    return selected === undefined ? null : { [question.question]: selected.label };
+  });
 }
 
 async function prompt(
@@ -107,6 +217,9 @@ async function prompt(
   const text = promptText(params);
   if (text.length === 0) throw RequestError.invalidParams(undefined, 'the prompt has no text');
   if (signal.aborted) return { stopReason: 'cancelled' };
+  if (state.capabilities.fsRead || state.capabilities.fsWrite) {
+    log.debug('acp: client fs capabilities are not used; the engine reads and writes in-process');
+  }
   try {
     const stopReason = await bridge.prompt(text);
     return { stopReason };

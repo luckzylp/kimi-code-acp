@@ -10,7 +10,7 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 function compareVersions(left, right) {
   const a = left.split('.').map(Number);
@@ -113,8 +113,20 @@ function resolvePnpm(upstreamDir, nodeDir) {
 }
 
 /**
- * Resolve node and pnpm for `upstreamDir`. Prepends the chosen node to this
- * process's PATH so child scripts (tsdown, postinstall) use it too.
+ * How to run npm under the resolved node: the CLI script shipped with that
+ * node, so npm's own engine checks see the same node the rest of the build
+ * uses (running `npm` from PATH can resolve to an older node).
+ */
+function resolveNpm(nodeDir) {
+  const node = nodeDir === undefined ? process.execPath : join(nodeDir, 'node');
+  const cli = join(nodeDir === undefined ? dirname(process.execPath) : nodeDir, '..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js');
+  if (existsSync(cli)) return { node, prefix: [cli] };
+  return { node: 'npm', prefix: [] };
+}
+
+/**
+ * Resolve node, pnpm and npm for `upstreamDir`. Prepends the chosen node to
+ * this process's PATH so child scripts (tsdown, postinstall) use it too.
  */
 export function configureToolchain(upstreamDir) {
   const nodeDir = resolveNodeDir(upstreamDir);
@@ -122,8 +134,9 @@ export function configureToolchain(upstreamDir) {
     process.env['PATH'] = `${nodeDir}:${process.env['PATH'] ?? ''}`;
   }
   const pnpm = resolvePnpm(upstreamDir, nodeDir);
+  const npm = resolveNpm(nodeDir);
   const nodeVersion = nodeDir === undefined ? process.versions.node : readNodeVersion(nodeDir);
-  return { nodeDir, pnpm, nodeVersion };
+  return { nodeDir, pnpm, npm, nodeVersion };
 }
 
 /**

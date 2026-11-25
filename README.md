@@ -14,7 +14,7 @@ functions that already carry eight local patches. See the ADR's alternatives.
 
 ## Status
 
-**M0 — walking skeleton, verified end to end.** Present today:
+**M1 — usable single-session ACP agent, verified end to end.** Present today:
 
 - `initialize`, `session/new`, `session/prompt`, `session/cancel`
 - the **run** model: a prompt settles at quiescence (session idle, or a 2 s
@@ -22,10 +22,20 @@ functions that already carry eight local patches. See the ADR's alternatives.
   inside the client's prompt
 - coalesced `agent_message_chunk` / `agent_thought_chunk` streaming with one
   `messageId` per message, through a single ordered outbox
-- client capability negotiation (`terminal_output`, `terminal_output_delta`),
-  read once and ready for the terminal mirror
+- **tool cards**: title/kind/status, `rawInput`/`rawOutput`, diff content,
+  locations for readable files, streamed argument updates
+- **shadow terminals**: the engine runs the command; the client creates a
+  display terminal from `_meta.terminal_info` and receives
+  `_meta.terminal_output` chunks and `_meta.terminal_exit`. No `terminal/*`
+  reverse RPC exists, so a dropped client terminal cannot pin a turn
+- **permissions**: `session/request_permission` with approve-once /
+  approve-for-session / reject, mapped onto the engine's approval handler
+- **elicitation**: questions become `elicitation/create` forms when the client
+  supports them, and a choice-style permission request otherwise
+- client capability negotiation (`terminal_output`, `terminal_output_delta`,
+  `elicitation.form`, `fs.*`), read once at `initialize`
 
-M1 adds tool projection and display terminals, M2 sessions/load/replay and the
+M2 adds `session/load|resume|fork|list|delete`, replay filtering, and the
 goal/swarm projections — see the ADR's projection table.
 
 ## Prerequisites
@@ -43,14 +53,33 @@ node scripts/upstream.mjs   # fetch the pinned tag into vendor/upstream and inst
 node scripts/typecheck.mjs  # type-check the adapter inside the upstream workspace
 node scripts/build.mjs      # build dist/main.mjs and copy it back
 node scripts/smoke.mjs      # ACP handshake + session/new against the real engine
-node scripts/e2e.mjs        # prompt -> engine turn -> stream -> end_turn, and cancel
+node scripts/e2e.mjs        # turn, stream, cancel, tool card, shadow terminal
+node scripts/pack.mjs       # tarball + install tree, verified by handshake
 ```
 
 `npm run verify` runs typecheck, build, smoke and e2e in order.
 
-Point Zed at `packages/kimi-acp/dist/main.mjs` as a custom agent command
-(`node <absolute path>`), or package it as an npx cache bundle the way the
-patch repository does.
+## Installable artifact
+
+`node scripts/pack.mjs` produces what a client installs:
+
+```
+build/moonshot-ai-kimi-code-acp-0.1.0.tgz     the publishable tarball
+build/npx-cache/npx/kimi-acp/
+  package.json                                pins @moonshot-ai/kimi-code-acp
+  package-lock.json
+  node_modules/@moonshot-ai/kimi-code-acp/    dist/main.mjs
+  node_modules/.bin/kimi-acp                  the shim Zed runs
+```
+
+That directory is the same shape as the npx cache Zed keeps for an agent, so it
+can be dropped into a registry cache as-is. The bundle is **self-contained** —
+the engine and the SDK are compiled into `dist/main.mjs` — so `node_modules`
+holds only `@moonshot-ai/kimi-code-acp`: there is nothing to resolve at run
+time, and no transitive tree to audit.
+
+Point Zed at the installed bin (or at `packages/kimi-acp/dist/main.mjs`) as a
+custom agent command: `node <absolute path>`.
 
 A warm pnpm store cuts a cold install from tens of minutes to seconds:
 
@@ -67,11 +96,13 @@ packages/kimi-acp/       the adapter — the only source in this repository
   src/coalesce.ts        text coalescing
   src/outbox.ts          one ordered FIFO per session, no per-update timeouts
   src/capabilities.ts    what the client said it can render
+  src/tool-calls.ts      tool cards, diff/locations, shadow terminals
 scripts/upstream.mjs     fetch + install the pinned upstream tag
 scripts/workspace.mjs    copy the adapter into the upstream workspace, collect the bundle
 scripts/toolchain.mjs    resolve the pinned node/pnpm
+scripts/pack.mjs         tarball + npx-cache install tree, verified by handshake
 scripts/smoke.mjs        handshake smoke
-scripts/e2e.mjs          turn + cancel end-to-end against a fake provider
+scripts/e2e.mjs          turn, cancel, tool card, shadow terminal end-to-end
 scripts/lib/             ACP stdio client, fake provider, throwaway home
 upstream.json            the tag pin
 ```

@@ -11,6 +11,9 @@ export class AcpChild {
     this.nextId = 1;
     this.pending = new Map();
     this.notifications = [];
+    /** Requests the agent sent to us (permission, elicitation, fs, terminal). */
+    this.requests = [];
+    this.handlers = new Map();
     this.buffer = '';
     child.stdout.setEncoding('utf8');
     child.stdout.on('data', (chunk) => this.consume(chunk));
@@ -35,12 +38,41 @@ export class AcpChild {
         this.notifications.push(message);
         continue;
       }
+      if (message.method !== undefined && message.id !== undefined) {
+        this.answer(message);
+        continue;
+      }
       const waiter = message.id === undefined ? undefined : this.pending.get(message.id);
       if (waiter === undefined) continue;
       this.pending.delete(message.id);
       if (message.error) waiter.reject(new Error(`${message.error.code}: ${message.error.message}`));
       else waiter.resolve(message.result);
     }
+  }
+
+  /** Register the client half of a method the agent calls. */
+  onRequest(method, handler) {
+    this.handlers.set(method, handler);
+  }
+
+  /** Requests of one method the agent sent, in order. */
+  requestsOf(method) {
+    return this.requests.filter((request) => request.method === method).map((request) => request.params);
+  }
+
+  answer(message) {
+    this.requests.push({ method: message.method, params: message.params });
+    const handler = this.handlers.get(message.method);
+    Promise.resolve(handler === undefined ? undefined : handler(message.params)).then(
+      (result) => {
+        this.child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: message.id, result })}\n`);
+      },
+      (error) => {
+        this.child.stdin.write(
+          `${JSON.stringify({ jsonrpc: '2.0', id: message.id, error: { code: -32603, message: String(error) } })}\n`,
+        );
+      },
+    );
   }
 
   request(method, params, timeoutMs = 60_000) {

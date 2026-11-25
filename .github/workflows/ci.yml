@@ -40,5 +40,8 @@ jobs:
       - name: Smoke the bundle
         run: node scripts/smoke.mjs
 
-      - name: End-to-end turn and cancel
+      - name: End-to-end turn, cancel, tool card, shadow terminal
         run: node scripts/e2e.mjs
+
+      - name: Package and install
+        run: node scripts/pack.mjs

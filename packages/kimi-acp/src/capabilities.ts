@@ -11,22 +11,43 @@ export interface ClientCapabilities {
   readonly terminalOutput: boolean;
   /** `_meta.terminal_output_delta`: appends `terminal_output_delta` chunks instead of replacement chunks. */
   readonly terminalOutputDelta: boolean;
+  /** `elicitation.form`: renders a form from a requested schema. */
+  readonly elicitationForm: boolean;
+  /** `fs.readTextFile`: the client serves file reads. */
+  readonly fsRead: boolean;
+  /** `fs.writeTextFile`: the client serves file writes. */
+  readonly fsWrite: boolean;
 }
 
-const NONE: ClientCapabilities = { terminalOutput: false, terminalOutputDelta: false };
+const NONE: ClientCapabilities = {
+  terminalOutput: false,
+  terminalOutputDelta: false,
+  elicitationForm: false,
+  fsRead: false,
+  fsWrite: false,
+};
 
-type MetaCarrier = { readonly _meta?: Record<string, unknown> | null | undefined } | null | undefined;
+type CapabilitiesCarrier =
+  | {
+      readonly _meta?: Record<string, unknown> | null | undefined;
+      readonly fs?: { readonly readTextFile?: boolean; readonly writeTextFile?: boolean } | null | undefined;
+      readonly elicitation?: { readonly form?: object | null } | null | undefined;
+    }
+  | null
+  | undefined;
 
 function metaFlag(meta: Record<string, unknown> | null | undefined, key: string): boolean {
   return meta?.[key] === true;
 }
 
-export function readClientCapabilities(capabilities: MetaCarrier): ClientCapabilities {
+export function readClientCapabilities(capabilities: CapabilitiesCarrier): ClientCapabilities {
   const meta = capabilities?._meta;
-  if (meta === undefined || meta === null) return NONE;
   const delta = metaFlag(meta, 'terminal_output_delta');
   return {
     terminalOutput: delta || metaFlag(meta, 'terminal_output'),
     terminalOutputDelta: delta,
+    elicitationForm: capabilities?.elicitation?.form !== undefined && capabilities?.elicitation?.form !== null,
+    fsRead: capabilities?.fs?.readTextFile === true,
+    fsWrite: capabilities?.fs?.writeTextFile === true,
   };
 }
