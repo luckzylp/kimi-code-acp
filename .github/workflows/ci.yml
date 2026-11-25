@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      KIMI_PNPM_STORE_DIR: ${{ github.workspace }}/.pnpm-store
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+
+      - name: Restore the pnpm store
+        uses: actions/cache@v4
+        with:
+          path: .pnpm-store
+          key: pnpm-store-${{ runner.os }}-${{ hashFiles('upstream.json') }}
+          restore-keys: pnpm-store-${{ runner.os }}-
+
+      - name: Fetch and install the pinned upstream tag
+        run: node scripts/upstream.mjs
+
+      - name: Type-check the adapter
+        run: node scripts/typecheck.mjs
+
+      - name: Build the bundle
+        run: node scripts/build.mjs
+
+      - name: Smoke the bundle
+        run: node scripts/smoke.mjs
+
+      - name: End-to-end turn and cancel
+        run: node scripts/e2e.mjs
