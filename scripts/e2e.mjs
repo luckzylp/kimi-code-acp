@@ -193,7 +193,7 @@ async function waitFor(predicate, timeoutMs, what) {
  */
 async function surfaceScenario() {
   await withAgent({ script: [{ kind: 'text', text: 'ok' }] }, async ({ agent, workDir }) => {
-    await agent.request('initialize', { protocolVersion: 1, clientCapabilities: {} });
+    const init = await agent.request('initialize', { protocolVersion: 1, clientCapabilities: {} });
     const created = await agent.request('session/new', { cwd: workDir, mcpServers: [] });
     if (typeof created.sessionId !== 'string') throw new Error('session/new returned no sessionId');
     const ids = (created.configOptions ?? []).map((option) => option.id);
@@ -203,6 +203,12 @@ async function surfaceScenario() {
     if (created.modes === undefined || typeof created.modes.currentModeId !== 'string') {
       throw new Error('session/new returned no mode state');
     }
+    const authMethods = init.authMethods ?? [];
+    const login = authMethods.find((method) => method.id === 'login');
+    if (login === undefined || login.type !== 'terminal' || !(login.args ?? []).includes('login')) {
+      throw new Error('initialize did not advertise the terminal login method');
+    }
+    ok('initialize advertises the terminal login method');
     ok(`config options ${ids.join(', ')}; mode ${created.modes.currentModeId}`);
 
     await waitFor(
@@ -245,6 +251,15 @@ async function surfaceScenario() {
       'usage_update after the turn',
     );
     ok('usage_update refreshed after the turn');
+
+    let rejected = false;
+    try {
+      await agent.request('authenticate', { methodId: 'nope' });
+    } catch {
+      rejected = true;
+    }
+    if (!rejected) throw new Error('authenticate accepted an unknown method');
+    ok('authenticate rejects an unknown method');
   });
 }
 

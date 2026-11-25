@@ -36,6 +36,10 @@ import {
   type ForkSessionResponse,
   type SetSessionModeRequest,
   type SetSessionModeResponse,
+  type AuthenticateRequest,
+  type AuthenticateResponse,
+  type LogoutRequest,
+  type LogoutResponse,
   type SetSessionConfigOptionRequest,
   type SetSessionConfigOptionResponse,
   type SessionConfigOption,
@@ -49,6 +53,7 @@ import {
 } from '@agentclientprotocol/sdk';
 import { createKimiHarness, type KimiHarness, type Session as KimiSession } from '@moonshot-ai/kimi-code-sdk';
 
+import { LOGIN_METHOD_ID, terminalAuthMethod } from './auth';
 import { readClientCapabilities, type ClientCapabilities } from './capabilities';
 import {
   ACP_MODES,
@@ -105,6 +110,8 @@ export function createAgentApp(): { app: AgentApp; close: () => Promise<void> } 
     .onRequest('session/delete', (context) => deleteSession(state, context.params))
     .onRequest('session/close', (context) => closeSession(state, context.params))
     .onRequest('session/fork', (context) => forkSession(state, context.params))
+    .onRequest('authenticate', (context) => authenticate(state, context.params))
+    .onRequest('logout', (context) => logout(state, context.params))
     .onRequest('session/set_mode', (context) => setMode(state, context.params))
     .onRequest('session/set_config_option', (context) => setConfigOption(state, context.params))
     .onRequest('session/prompt', (context) => prompt(state, context.params, context.signal))
@@ -127,6 +134,7 @@ function initialize(state: AgentState, params: InitializeRequest): InitializeRes
       loadSession: true,
       promptCapabilities: { image: true, embeddedContext: true },
     },
+    authMethods: [terminalAuthMethod()],
   };
 }
 
@@ -348,6 +356,36 @@ async function setConfigOption(
   });
   void entry.bridge.emitUsage();
   return { configOptions };
+}
+
+/**
+ * `authenticate`: the terminal auth method opens the device-code flow in the
+ * client's terminal; a client that calls `authenticate` directly gets the same
+ * flow, with the URL written to this agent's stderr.
+ */
+async function authenticate(
+  state: AgentState,
+  params: AuthenticateRequest,
+): Promise<AuthenticateResponse> {
+  if (params.methodId !== LOGIN_METHOD_ID) {
+    throw RequestError.invalidParams({ methodId: params.methodId }, 'Unknown auth method');
+  }
+  const harness = await harnessOf(state);
+  await harness.auth.login(undefined, {
+    onDeviceCode: (authorization) => {
+      log.warn('acp: device login required', {
+        url: authorization.verificationUriComplete,
+        code: authorization.userCode,
+      });
+    },
+  });
+  return {};
+}
+
+async function logout(state: AgentState, _params: LogoutRequest): Promise<LogoutResponse> {
+  const harness = await harnessOf(state);
+  await harness.auth.logout();
+  return {};
 }
 
 /**

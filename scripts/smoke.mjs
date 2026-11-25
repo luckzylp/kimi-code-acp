@@ -48,6 +48,18 @@ async function checkVersion() {
   });
   if (!/^kimi-acp \d+\.\d+\.\d+$/.test(output)) fail(`unexpected --version output: ${JSON.stringify(output)}`);
   ok(`--version → ${output}`);
+
+  const help = await new Promise((resolvePromise, rejectPromise) => {
+    const child = spawn(process.execPath, [mainPath, '--help'], { stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '';
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk;
+    });
+    child.on('error', rejectPromise);
+    child.on('close', () => resolvePromise(stdout));
+  });
+  if (!help.includes('kimi-acp login')) fail('--help does not document the login command');
+  ok('--help documents the login command');
 }
 
 async function checkHandshake() {

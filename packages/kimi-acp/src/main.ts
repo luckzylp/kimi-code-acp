@@ -9,10 +9,18 @@ import { Readable, Writable } from 'node:stream';
 import { ndJsonStream } from '@agentclientprotocol/sdk';
 
 import { createAgentApp } from './agent';
+import { runLogin } from './auth';
 import { log, redirectConsoleToStderr } from './log';
 import { AGENT_NAME, VERSION } from './version';
 
 const argv = process.argv.slice(2);
+
+if (argv[0] === 'login' || argv.includes('--login')) {
+  // The ACP terminal auth method runs exactly this: the device-code flow in a
+  // terminal the client opened for it.
+  const code = await runLogin();
+  process.exit(code);
+}
 
 if (argv.includes('--version') || argv.includes('-v')) {
   process.stdout.write(`${AGENT_NAME} ${VERSION}\n`);
@@ -24,6 +32,7 @@ if (argv.includes('--help') || argv.includes('-h')) {
       'An ACP agent for kimi-code, spoken over stdio.\n\n' +
       'Usage:\n' +
       '  kimi-acp            serve ACP on stdin/stdout\n' +
+      '  kimi-acp login      run the device-code login flow\n' +
       '  kimi-acp --version  print the version\n',
   );
   process.exit(0);

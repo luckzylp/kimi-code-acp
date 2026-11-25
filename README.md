@@ -32,6 +32,9 @@ verified end to end.** Present today:
   `resource_link` files read on the host and inlined, and embedded resources
 - **cancellation everywhere**: a run, and a permission dialog left open when the
   client cancels, both settle as `cancelled`
+- **login**: `kimi-acp login` runs the device-code flow in a terminal and is
+  advertised as ACP's `terminal` auth method, so a client can start it from its
+  sign-in UI; `authenticate` / `logout` are handled too
 - the **run** model: a prompt settles at quiescence (session idle, or a 2 s
   grace after the turn), not at `turn.ended`, so continuation turns stay
   inside the client's prompt
@@ -71,6 +74,12 @@ node scripts/build.mjs      # build dist/main.mjs and copy it back
 node scripts/smoke.mjs      # ACP handshake + session/new against the real engine
 node scripts/e2e.mjs        # turn, stream, cancel, tool card, shadow terminal
 node scripts/pack.mjs       # tarball + install tree, verified by handshake
+```
+
+Signing in, once the bundle is installed:
+
+```sh
+node packages/kimi-acp/dist/main.mjs login   # device-code flow in this terminal
 ```
 
 `npm run verify` runs typecheck, build, smoke and e2e in order.
