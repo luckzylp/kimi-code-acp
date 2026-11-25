@@ -59,6 +59,7 @@ import {
   modelEntries,
 } from './config-options';
 import { log } from './log';
+import { buildPrompt } from './prompt';
 import { projectReplay, type ReplayRecord } from './replay';
 import { SessionBridge } from './session';
 import { toolKind } from './tool-calls';
@@ -447,12 +448,12 @@ async function prompt(
 ): Promise<PromptResponse> {
   const entry = state.sessions.get(params.sessionId);
   if (entry === undefined) throw RequestError.invalidParams(undefined, 'unknown session');
-  const text = promptText(params);
-  if (text.length === 0) throw RequestError.invalidParams(undefined, 'the prompt has no text');
   if (signal.aborted) return { stopReason: 'cancelled' };
-  const skill = await matchSkill(entry.session, text);
+  const built = await buildPrompt(entry.session, params.prompt);
+  if (built.parts.length === 0) throw RequestError.invalidParams(undefined, 'the prompt has no content');
+  const skill = built.text.length === 0 ? undefined : await matchSkill(entry.session, built.text);
   try {
-    const stopReason = await entry.bridge.prompt(text, skill);
+    const stopReason = await entry.bridge.prompt(built.parts, skill);
     if (stopReason === 'end_turn') {
       void entry.bridge.emitUsage();
       void maybeGenerateTitle(state, entry);
@@ -507,15 +508,6 @@ async function maybeGenerateTitle(state: AgentState, entry: SessionEntry): Promi
 
 function cancel(state: AgentState, params: CancelNotification): void {
   state.sessions.get(params.sessionId)?.bridge.cancel();
-}
-
-function promptText(params: PromptRequest): string {
-  const parts: string[] = [];
-  for (const block of params.prompt) {
-    if (block.type === 'text') parts.push(block.text);
-    else log.debug('acp: ignoring non-text prompt block', { type: block.type });
-  }
-  return parts.join('');
 }
 
 async function close(state: AgentState): Promise<void> {

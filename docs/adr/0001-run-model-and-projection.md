@@ -1,6 +1,6 @@
 # ADR 0001 — Own ACP adapter, run model, and projection rules
 
-- **Status**: accepted; M0, M1 and M2 landed
+- **Status**: accepted; M0, M1, M2 and prompt content landed
 - **Verified**: M0 chain (tag → workspace → single-file bundle → engine session
   → turn → coalesced stream → cancel) — see [Verification](#verification)
 - **Date**: 2026-11-25
@@ -193,6 +193,18 @@ Risks:
 - Native assets (tree-sitter, minidb, ripgrep) must ship beside the bundle.
 - Headless auth: device-code OAuth through `authenticate`, or API-key config.
 
+## Known limitations
+
+- **Client MCP servers** (`session/new.mcpServers`): the SDK's
+  `CreateSessionOptions` exposes no session-scoped MCP list, and
+  `harness.addMcpServer` writes the user's global config. The adapter logs and
+  ignores them rather than mutating configuration; the engine's own MCP config
+  still applies.
+- **`authenticate`**: no auth methods are advertised yet, so a user signs in
+  with the `kimi` CLI first (API key or OAuth) and the adapter picks the
+  configured model up.
+- **Goal / swarm projections** are designed (Decision 4) but not implemented.
+
 ## Alternatives rejected
 
 - **Keep patching `packages/acp-server`.** Every new feature lands in the same
@@ -222,6 +234,8 @@ M0 was validated on 2026-11-25 against `@moonshot-ai/kimi-code@2.7.3`:
 | session lifecycle | `node scripts/e2e.mjs` | `session/fork` returns a working session, `session/delete` removes it from `session/list` |
 | session surface | `node scripts/e2e.mjs` | model/thinking/mode options, `set_mode` (plan on/off), `set_config_option`, commands, usage |
 | load + replay | `node scripts/e2e.mjs` | second process loads the session, replays prompt/reply/tool card without injected context, accepts a new prompt |
+| prompt content | `node scripts/e2e.mjs` | an image reaches the model request as a data URL, a linked markdown file is inlined |
+| cancel in a dialog | `node scripts/e2e.mjs` | cancelling with an open permission request settles the run as `cancelled` |
 | install tree | `node scripts/pack.mjs` | 2.6 MB tarball, installed `node_modules` + lockfile, handshake from the installed copy |
 
 Implementation notes worth keeping:

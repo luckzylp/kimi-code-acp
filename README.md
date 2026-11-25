@@ -28,6 +28,10 @@ verified end to end.** Present today:
   `session/set_config_option`, `session/set_mode`, skills advertised as slash
   commands, `usage_update` after setup and each turn, and
   `session_info_update` from generated titles
+- **prompt content**: text, images (attached to the engine's media store),
+  `resource_link` files read on the host and inlined, and embedded resources
+- **cancellation everywhere**: a run, and a permission dialog left open when the
+  client cancels, both settle as `cancelled`
 - the **run** model: a prompt settles at quiescence (session idle, or a 2 s
   grace after the turn), not at `turn.ended`, so continuation turns stay
   inside the client's prompt
@@ -46,9 +50,9 @@ verified end to end.** Present today:
 - client capability negotiation (`terminal_output`, `terminal_output_delta`,
   `elicitation.form`, `fs.*`), read once at `initialize`
 
-M3 adds prompt content beyond text (images, embedded context, resource links),
-client-supplied MCP servers, and the goal/swarm projections — see the ADR's
-projection table.
+M4 adds client-supplied MCP servers (not exposed by the SDK today — see the
+ADR) and the goal/swarm projections; both are recorded in the ADR's projection
+table.
 
 ## Prerequisites
 

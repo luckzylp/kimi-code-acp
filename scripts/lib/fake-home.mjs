@@ -16,6 +16,7 @@ export function writeFakeHome({ baseUrl = 'http://127.0.0.1:1/v1', apiKey = 'tes
       `baseUrl = "${baseUrl}"`,
       `apiKey = "${apiKey}"`,
       'maxContextSize = 8192',
+      'capabilities = ["image_in"]',
       '',
     ].join('\n'),
     'utf8',

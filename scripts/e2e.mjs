@@ -12,8 +12,9 @@
  *     the client as `_meta.terminal_output` with `terminal_info`/`terminal_exit`
  *     — the agent owns execution, the client renders a shadow
  */
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { pathToFileURL } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -248,6 +249,76 @@ async function surfaceScenario() {
 }
 
 /**
+ * Cancelling while a permission dialog is open: the client answers the
+ * outstanding request with \`cancelled\` (as ACP requires) and the run ends
+ * cancelled instead of waiting for a decision nobody will make.
+ */
+async function cancelDuringPermissionScenario() {
+  await withAgent(
+    { script: [{ kind: 'tool', id: 'call_gate', name: 'Bash', arguments: JSON.stringify({ command: 'echo gated' }) }] },
+    async ({ agent, workDir }) => {
+      await agent.request('initialize', { protocolVersion: 1, clientCapabilities: {} });
+      const pending = [];
+      agent.onRequest('session/request_permission', () => new Promise((resolvePromise) => {
+        pending.push(resolvePromise);
+      }));
+      const created = await agent.request('session/new', { cwd: workDir, mcpServers: [] });
+      const promptPromise = agent.request(
+        'session/prompt',
+        { sessionId: created.sessionId, prompt: [{ type: 'text', text: 'run it' }] },
+        60_000,
+      );
+      await waitFor(() => pending.length > 0, 10_000, 'the permission request');
+      agent.notify('session/cancel', { sessionId: created.sessionId });
+      pending[0]({ outcome: { outcome: 'cancelled' } });
+      const response = await promptPromise;
+      if (response.stopReason !== 'cancelled') {
+        throw new Error(`cancelling a pending permission returned ${response.stopReason}`);
+      }
+      ok('session/cancel with an open permission dialog settled as cancelled');
+    },
+  );
+}
+
+/**
+ * Prompt content beyond text: an image is attached to the engine's media store
+ * and a linked markdown file is read on the host and inlined.
+ */
+async function promptContentScenario() {
+  // 1x1 transparent PNG.
+  const png =
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+  await withAgent({ script: [{ kind: 'text', text: 'described' }] }, async ({ agent, provider, workDir }) => {
+    const notesPath = join(workDir, 'IMAGE-NOTES.md');
+    writeFileSync(notesPath, 'IMAGE-NOTES: a one pixel image', 'utf8');
+    await agent.request('initialize', { protocolVersion: 1, clientCapabilities: {} });
+    const created = await agent.request('session/new', { cwd: workDir, mcpServers: [] });
+    const response = await agent.request(
+      'session/prompt',
+      {
+        sessionId: created.sessionId,
+        prompt: [
+          { type: 'text', text: 'describe the image' },
+          { type: 'image', data: png, mimeType: 'image/png' },
+          {
+            type: 'resource_link',
+            uri: pathToFileURL(notesPath).href,
+            name: 'image-notes.md',
+            mimeType: 'text/markdown',
+          },
+        ],
+      },
+      120_000,
+    );
+    if (response.stopReason !== 'end_turn') throw new Error('the content prompt did not finish');
+    const body = provider.requests[0]?.body ?? '';
+    if (!body.includes('IMAGE-NOTES')) throw new Error('the linked resource was not inlined into the prompt');
+    if (!/image_url|data:image\/png/.test(body)) throw new Error('the image was not attached to the prompt');
+    ok('prompt carried an attached image and an inlined linked file');
+  });
+}
+
+/**
  * `session/fork` and `session/delete`: a fork is a new engine session that
  * accepts prompts, and deleting it removes it from the listing.
  */
@@ -379,6 +450,8 @@ await turnScenario();
 await cancelScenario();
 await terminalScenario();
 await surfaceScenario();
+await promptContentScenario();
+await cancelDuringPermissionScenario();
 await lifecycleScenario();
 await loadScenario();
-ok('M1 end-to-end: turn, stream, cancel, tool card, shadow terminal, load');
+ok('end-to-end: turn, stream, cancel, tool card, shadow terminal, load, surface, prompt content');

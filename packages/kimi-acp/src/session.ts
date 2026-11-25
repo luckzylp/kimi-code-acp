@@ -15,7 +15,7 @@
 import { randomUUID } from 'node:crypto';
 
 import type { SessionNotification, StopReason, ToolCallUpdate } from '@agentclientprotocol/sdk';
-import type { Event, Session as KimiSession } from '@moonshot-ai/kimi-code-sdk';
+import type { Event, PromptPart, Session as KimiSession } from '@moonshot-ai/kimi-code-sdk';
 
 import { TextCoalescer } from './coalesce';
 import { describeEngineTurn } from './engine-turn';
@@ -97,7 +97,7 @@ export class SessionBridge {
    * response comes from the events below, not from `prompt()` itself.
    */
   prompt(
-    text: string,
+    input: string | readonly PromptPart[],
     skill?: { readonly name: string; readonly args?: string },
   ): Promise<StopReason> {
     if (this.run !== undefined && !this.run.settled) {
@@ -108,8 +108,8 @@ export class SessionBridge {
       this.run = run;
       const submission =
         skill === undefined
-          ? this.options.session.prompt(text)
-          : this.options.session.promptWithSkills(text, [skill]);
+          ? this.options.session.prompt(input as string | PromptPart[])
+          : this.options.session.promptWithSkills(input as string | PromptPart[], [skill]);
       submission.catch((error: unknown) => {
         this.fail(run, error);
       });
