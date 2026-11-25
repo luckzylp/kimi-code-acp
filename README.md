@@ -38,6 +38,9 @@ verified end to end.** Present today:
 - **activity the engine does not express as tool calls**: `TodoList` becomes
   the session's `plan`; goals, subagents and compaction become synthetic cards
   and one-line notices (`src/activity.ts`, unit-tested)
+- **protocol-level cancel**: `$/cancel_request` cancels the request it names,
+  as clients that drop a request expect; `additionalDirectories` is honoured
+  on `session/new`, `load` and `resume`
 - the **run** model: a prompt settles at quiescence (session idle, or a 2 s
   grace after the turn), not at `turn.ended`, so continuation turns stay
   inside the client's prompt

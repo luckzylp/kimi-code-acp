@@ -342,6 +342,17 @@ export class SessionBridge {
         );
         return;
       }
+      case 'error': {
+        // A failed request or provider error is otherwise invisible to the
+        // client: the turn ends, but nothing says why.
+        log.warn('acp: engine error', { sessionId: this.sessionId, code: event.code, message: event.message });
+        void this.outbox.push(notice(this.options.sessionId, `[kimi-code] ${event.message}`));
+        return;
+      }
+      case 'warning': {
+        void this.outbox.push(notice(this.options.sessionId, `[kimi-code] ${event.message}`));
+        return;
+      }
       case 'session.meta.updated': {
         if (typeof event.title === 'string' && event.title.length > 0) {
           void this.outbox.push({

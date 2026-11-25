@@ -75,15 +75,21 @@ export class AcpChild {
     );
   }
 
-  request(method, params, timeoutMs = 60_000) {
+  /** Send a request and keep its JSON-RPC id, so a test can cancel it. */
+  beginRequest(method, params, timeoutMs = 60_000) {
     const id = this.nextId++;
     this.child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`);
-    return new Promise((resolvePromise, reject) => {
+    const promise = new Promise((resolvePromise, reject) => {
       this.pending.set(id, { resolve: resolvePromise, reject });
       setTimeout(() => {
         if (this.pending.delete(id)) reject(new Error(`${method} timed out`));
       }, timeoutMs).unref();
     });
+    return { id, promise };
+  }
+
+  request(method, params, timeoutMs = 60_000) {
+    return this.beginRequest(method, params, timeoutMs).promise;
   }
 
   notify(method, params) {

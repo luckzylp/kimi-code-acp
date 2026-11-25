@@ -19,7 +19,7 @@
  */
 import type { SessionNotification } from '@agentclientprotocol/sdk';
 
-import { goalCard, type GoalSnapshotLike } from './activity';
+import { goalCard, planNotification, type GoalSnapshotLike, type TodoLike } from './activity';
 import { describeEngineTurn, isAutonomousOrigin } from './engine-turn';
 import { resultContent, toolKind } from './tool-calls';
 
@@ -126,6 +126,13 @@ export function projectReplay(
       }
       for (const toolCall of message.toolCalls ?? []) {
         toolCallTurns.set(toolCall.id, turnId);
+        if (toolCall.name === 'TodoList') {
+          // The todo list is the session's plan, not a card: restore it as one.
+          const todos = todoItemsOf(toolCall.arguments);
+          const plan = planNotification(sessionId, todos);
+          if (plan !== null) out.push(plan);
+          continue;
+        }
         out.push(toolCallCard(sessionId, turnId, toolCall));
       }
       continue;
@@ -193,6 +200,21 @@ function toolResultUpdate(
       content: resultContent(textOf(message.content) ?? ''),
     },
   };
+}
+
+/** The `todos` a TodoList call persisted, when its arguments still parse. */
+function todoItemsOf(args: string | null): TodoLike[] {
+  const parsed = parseArguments(args);
+  if (typeof parsed !== 'object' || parsed === null) return [];
+  const todos = (parsed as { todos?: unknown }).todos;
+  if (!Array.isArray(todos)) return [];
+  return todos.flatMap((item): TodoLike[] => {
+    if (typeof item !== 'object' || item === null) return [];
+    const record = item as Record<string, unknown>;
+    const title = record['title'];
+    const status = record['status'];
+    return typeof title === 'string' && typeof status === 'string' ? [{ title, status }] : [];
+  });
 }
 
 function parseArguments(args: string | null): unknown {

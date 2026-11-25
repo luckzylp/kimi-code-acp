@@ -180,7 +180,13 @@ async function newSession(state: AgentState, params: NewSessionRequest): Promise
     // config still applies, so the session works without them.
     log.warn('acp: client MCP servers are not wired yet', { count: params.mcpServers.length });
   }
-  const session = await harness.createSession({ workDir: params.cwd, model });
+  const session = await harness.createSession({
+    workDir: params.cwd,
+    model,
+    ...(params.additionalDirectories === undefined || params.additionalDirectories.length === 0
+      ? {}
+      : { additionalDirs: params.additionalDirectories }),
+  });
   const entry = await registerSession(state, session);
   const { configOptions, modes } = await surface(state, session);
   log.info('acp: session created', { sessionId: session.id, cwd: params.cwd, model });
@@ -224,7 +230,13 @@ function scheduleSurfaceUpdates(entry: SessionEntry): void {
  */
 async function loadSession(state: AgentState, params: LoadSessionRequest): Promise<LoadSessionResponse> {
   const harness = await harnessOf(state);
-  const session = await harness.resumeSession({ id: params.sessionId, replayTurnLimit: 200 });
+  const session = await harness.resumeSession({
+    id: params.sessionId,
+    replayTurnLimit: 200,
+    ...(params.additionalDirectories === undefined || params.additionalDirectories.length === 0
+      ? {}
+      : { additionalDirs: params.additionalDirectories }),
+  });
   const entry = await registerSession(state, session);
   const records = (session.getResumeState()?.agents?.['main']?.replay ?? []) as unknown as ReplayRecord[];
   for (const notification of projectReplay(params.sessionId, records)) {
@@ -243,7 +255,12 @@ async function resumeSession(
   params: ResumeSessionRequest,
 ): Promise<ResumeSessionResponse> {
   const harness = await harnessOf(state);
-  const session = await harness.resumeSession({ id: params.sessionId });
+  const session = await harness.resumeSession({
+    id: params.sessionId,
+    ...(params.additionalDirectories === undefined || params.additionalDirectories.length === 0
+      ? {}
+      : { additionalDirs: params.additionalDirectories }),
+  });
   const entry = await registerSession(state, session);
   const { configOptions, modes } = await surface(state, session);
   scheduleSurfaceUpdates(entry);
@@ -490,6 +507,12 @@ async function prompt(
   const built = await buildPrompt(entry.session, params.prompt);
   if (built.parts.length === 0) throw RequestError.invalidParams(undefined, 'the prompt has no content');
   const skill = built.text.length === 0 ? undefined : await matchSkill(entry.session, built.text);
+  // A protocol-level `$/cancel_request` aborts this request's signal; the run
+  // has to be cancelled with it, not left waiting for the model.
+  const onAbort = (): void => {
+    entry.bridge.cancel();
+  };
+  signal.addEventListener('abort', onAbort, { once: true });
   try {
     const stopReason = await entry.bridge.prompt(built.parts, skill);
     if (stopReason === 'end_turn') {
@@ -499,6 +522,8 @@ async function prompt(
     return { stopReason };
   } catch (error) {
     throw RequestError.invalidRequest(undefined, error instanceof Error ? error.message : String(error));
+  } finally {
+    signal.removeEventListener('abort', onAbort);
   }
 }
 

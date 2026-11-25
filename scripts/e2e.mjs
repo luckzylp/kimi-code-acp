@@ -295,6 +295,31 @@ async function cancelDuringPermissionScenario() {
   );
 }
 
+/**
+ * `$/cancel_request` cancels the request it names — the protocol-level cancel
+ * clients use when they drop a request without a `session/cancel`.
+ */
+async function cancelRequestScenario() {
+  await withAgent(
+    { script: [{ kind: 'text', text: 'never finishes' }], delayMs: 30_000 },
+    async ({ agent, workDir }) => {
+      const sessionId = await newSession(agent, workDir);
+      const { id, promise } = agent.beginRequest(
+        'session/prompt',
+        { sessionId, prompt: [{ type: 'text', text: 'take your time' }] },
+        60_000,
+      );
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 300));
+      agent.notify('$/cancel_request', { requestId: id });
+      const response = await promise;
+      if (response.stopReason !== 'cancelled') {
+        throw new Error(`$/cancel_request returned ${response.stopReason}`);
+      }
+      ok('$/cancel_request cancelled the prompt it named');
+    },
+  );
+}
+
 /** A TodoList call becomes the session's ACP plan (Zed's todo list). */
 async function planScenario() {
   const script = [
@@ -411,6 +436,54 @@ async function lifecycleScenario() {
   );
 }
 
+/** `session/load` restores the plan from the TodoList call in history. */
+async function replayPlanScenario() {
+  const script = [
+    {
+      kind: 'tool',
+      id: 'call_todo',
+      name: 'TodoList',
+      arguments: JSON.stringify({ todos: [{ title: 'restore me', status: 'in_progress' }] }),
+    },
+    { kind: 'text', text: 'planned' },
+  ];
+  const provider = await startFakeProvider({ script });
+  const homeDir = writeFakeHome({ baseUrl: provider.baseUrl });
+  const workDir = mkdtempSync(join(tmpdir(), 'kimi-acp-work-'));
+  let sessionId;
+  const first = spawnAgent(mainPath, { homeDir });
+  try {
+    await first.request('initialize', { protocolVersion: 1, clientCapabilities: {} });
+    first.onRequest('session/request_permission', () => ({
+      outcome: { outcome: 'selected', optionId: 'approve_once' },
+    }));
+    const created = await first.request('session/new', { cwd: workDir, mcpServers: [] });
+    sessionId = created.sessionId;
+    await first.request(
+      'session/prompt',
+      { sessionId, prompt: [{ type: 'text', text: 'plan it' }] },
+      60_000,
+    );
+  } finally {
+    await first.close();
+  }
+  const second = spawnAgent(mainPath, { homeDir });
+  try {
+    await second.request('initialize', { protocolVersion: 1, clientCapabilities: {} });
+    await second.request('session/load', { sessionId, cwd: workDir, mcpServers: [] }, 60_000);
+    const plan = second.sessionUpdates().find((update) => update.sessionUpdate === 'plan');
+    if (plan === undefined) throw new Error('session/load did not restore the plan');
+    const entry = (plan.entries ?? []).find((item) => item.content === 'restore me');
+    if (entry?.status !== 'in_progress') throw new Error('the restored plan lost its status');
+    ok('session/load restored the plan from history');
+  } finally {
+    await second.close();
+    await provider.close();
+    rmSync(homeDir, { recursive: true, force: true });
+    rmSync(workDir, { recursive: true, force: true });
+  }
+}
+
 /**
  * Persistence and `session/load`: a second process reopens the session, the
  * adapter replays its history as updates (stripping injected reminders), and
@@ -503,7 +576,9 @@ await terminalScenario();
 await surfaceScenario();
 await promptContentScenario();
 await planScenario();
+await cancelRequestScenario();
 await cancelDuringPermissionScenario();
 await lifecycleScenario();
+await replayPlanScenario();
 await loadScenario();
 ok('end-to-end: turn, stream, cancel, tool card, shadow terminal, load, surface, prompt content');
