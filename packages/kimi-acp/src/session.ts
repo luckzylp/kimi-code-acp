@@ -124,6 +124,17 @@ export class SessionBridge {
     await this.options.session.steer(parts as PromptPart[]);
   }
 
+  /** The goal whose card is currently on screen, if any. */
+  currentGoalId(): string | undefined {
+    return this.goalId;
+  }
+
+  /** Close a goal's card; used when the goal is cleared without a `goal.updated`. */
+  async clearGoalCard(goalId: string, reason: string): Promise<void> {
+    await this.post(goalCleared(this.options.sessionId, goalId, reason));
+    if (this.goalId === goalId) this.goalId = undefined;
+  }
+
   /** Write a one-line system message into the transcript. */
   async note(text: string): Promise<void> {
     await this.post(notice(this.options.sessionId, text));

@@ -228,6 +228,7 @@ The chain was re-validated on 2026-11-26 against `@moonshot-ai/kimi-code@2.8.1`
 | plan projection | `node scripts/e2e.mjs` | a `TodoList` call becomes a `plan` with completed/in_progress/pending entries |
 | goal / subagent cards | `node scripts/test.mjs` | unit tests cover card ids, lifecycle status mapping, budget text, subagent states |
 | wire contract | `node scripts/test.mjs` | every v1/v2 update, config option and handshake the adapter emits parses with the ACP SDK's zod schemas |
+| goal extension | `node scripts/e2e.mjs` | `_session/goal set` opens the goal card, `/goal status` reads it, `_session/goal clear` closes it |
 | protocol cancel | `node scripts/e2e.mjs` | `$/cancel_request` cancels the prompt it names |
 | replay plan | `node scripts/e2e.mjs` | `session/load` restores the plan from the TodoList call in history |
 | install tree | `node scripts/pack.mjs` | 2.6 MB tarball, installed `node_modules` + lockfile, handshake from the installed copy |

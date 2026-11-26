@@ -60,6 +60,8 @@ verified end to end.** Present today:
   `plan_update`, native `terminal_update` / `terminal_output_chunk`, explicit
   `state_update` running/idle) and a `session/prompt` response without a stop
   reason; both share the same engine session machinery
+- **goal control**: the AIR `_session/goal` extension (`set` / `clear`) drives the
+  engine's goal and keeps the goal card in sync with `/goal`
 - **steering**: the `_session/steering` extension injects a follow-up into the
   running turn (`injected`), starts a detached turn when idle, or reports
   `promptRequired` to clients that own the fallback; a `session/prompt` that

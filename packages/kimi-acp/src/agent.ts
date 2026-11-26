@@ -79,6 +79,7 @@ import {
   modeOf,
   modelEntries,
 } from './config-options';
+import { GOAL_METHOD, parseGoalRequest, type GoalRequest } from './goal-extension';
 import { log } from './log';
 import { listProviders } from './providers';
 import { McpBridge } from './mcp-bridge';
@@ -171,6 +172,7 @@ export function createAgentApp(
     .onRequest('logout', (context) => logout(state, context.params))
     .onRequest('session/set_mode', (context) => setMode(state, context.params))
     .onRequest(STEER_METHOD, parseSteerRequest, (context) => steerRequest(state, context.params))
+    .onRequest(GOAL_METHOD, parseGoalRequest, (context) => goalRequest(state, context.params))
     .onRequest('session/set_config_option', (context) => setConfigOption(state, context.params))
     .onRequest('session/prompt', (context) => prompt(state, context.params, context.signal))
     .onNotification('session/cancel', (context) => {
@@ -605,6 +607,24 @@ export async function steerRequest(state: AgentState, params: SteerRequest): Pro
   }
   await entry.bridge.steer(built.parts);
   return { outcome: 'injected' };
+}
+
+/** `_session/goal`: set or clear the session's goal (AIR extension). */
+export async function goalRequest(state: AgentState, params: GoalRequest): Promise<Record<string, never>> {
+  const entry = state.sessions.get(params.sessionId);
+  if (entry === undefined) throw RequestError.invalidParams(undefined, 'unknown session');
+  if (params.action === 'set') {
+    await entry.session.createGoal({ objective: params.objective, replace: true });
+  } else {
+    const snapshot = await entry.session.cancelGoal();
+    // The engine clears the goal without an observable `goal.updated`, so the
+    // card is closed here.
+    await entry.bridge.clearGoalCard(
+      entry.bridge.currentGoalId() ?? snapshot.goalId,
+      'Goal cancelled.',
+    );
+  }
+  return {};
 }
 
 /**

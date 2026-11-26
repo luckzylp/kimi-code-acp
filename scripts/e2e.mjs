@@ -609,6 +609,58 @@ async function mcpAcpScenario() {
   });
 }
 
+/** AIR's `_session/goal`: set and clear the goal, reflected in the goal card. */
+async function goalExtensionScenario() {
+  // A goal can start a continuation turn; give the fake provider an answer.
+  await withAgent(
+    { script: [{ kind: 'text', text: 'goal continued' }, { kind: 'text', text: 'goal continued again' }] },
+    async ({ agent, workDir }) => {
+      const sessionId = await newSession(agent, workDir);
+      const set = await agent.request('_session/goal', {
+        sessionId,
+        action: 'set',
+        objective: 'ship the adapter',
+      });
+      if (typeof set !== 'object') throw new Error('_session/goal set returned no response');
+      await waitFor(
+        () =>
+          updates(agent).some(
+            (update) => update.sessionUpdate === 'tool_call' && String(update.toolCallId).startsWith('goal:'),
+          ),
+        10_000,
+        'the goal card',
+      );
+      ok('_session/goal set opened the goal card');
+
+      await agent.request(
+        'session/prompt',
+        { sessionId, prompt: [{ type: 'text', text: '/goal status' }] },
+        30_000,
+      );
+      const listed = lastAgentText(agent);
+      if (!listed.includes('ship the adapter') || !listed.includes('Status: active')) {
+        throw new Error(`/goal status did not report the goal: ${listed.slice(-300)}`);
+      }
+      ok('/goal status reports the goal set through the extension');
+
+      await agent.request('_session/goal', { sessionId, action: 'clear' });
+      await waitFor(
+        () =>
+          updates(agent).some(
+            (update) =>
+              update.sessionUpdate === 'tool_call_update' &&
+              String(update.toolCallId).startsWith('goal:') &&
+              update.status === 'completed' &&
+              JSON.stringify(update.content ?? '').includes('Goal cancelled'),
+          ),
+        10_000,
+        'the cleared goal card',
+      );
+      ok('_session/goal clear closed the goal card');
+    },
+  );
+}
+
 /** Built-in slash commands answer locally, without a model request. */
 async function commandScenario() {
   await withAgent({ script: [] }, async ({ agent, provider, workDir }) => {
@@ -986,6 +1038,7 @@ await surfaceScenario();
 await promptContentScenario();
 await planScenario();
 await commandScenario();
+await goalExtensionScenario();
 await mcpScenario();
 await mcpAcpScenario();
 await steeringScenario();

@@ -30,6 +30,7 @@ advertised** — the capability flag is never set, so a client does not call it;
 | `session/cancel` | implemented | cancels the run, including a pending permission dialog |
 | `$/cancel_request` | implemented | the SDK aborts the request signal; the handler cancels the run |
 | `_session/steering` (extension) | implemented | injects into the running turn; `startedNewTurn` when idle; `promptRequired` opt-in; advertised via `initialize._meta.steering` |
+| `_session/goal` (AIR extension) | implemented | `set` creates/replaces the engine goal, `clear` cancels it and closes the goal card; served on v1 and v2 |
 | `nes/start`, `nes/suggest`, `nes/close` | not advertised | next-edit suggestions are not a chat agent feature |
 
 ## ACP v2 (experimental draft)
