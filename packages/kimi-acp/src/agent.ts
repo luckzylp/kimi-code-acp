@@ -43,6 +43,7 @@ import {
   type SetSessionConfigOptionRequest,
   type SetSessionConfigOptionResponse,
   type AvailableCommand,
+  type McpServer as AcpMcpServer,
   type SessionConfigOption,
   type SessionModeState,
   type RequestPermissionRequest,
@@ -117,6 +118,8 @@ export interface AgentState {
   readonly sessions: Map<string, SessionEntry>;
   client: AgentContext | undefined;
   v2Client: V2ClientLike | undefined;
+  /** Bootstrap sessions holding client-declared MCP servers alive, by ACP session. */
+  readonly mcpBootstrap: Map<string, KimiSession>;
 }
 
 export function createAgentState(): AgentState {
@@ -126,6 +129,7 @@ export function createAgentState(): AgentState {
     sessions: new Map(),
     client: undefined,
     v2Client: undefined,
+    mcpBootstrap: new Map(),
   };
 }
 
@@ -169,6 +173,8 @@ function initialize(state: AgentState, params: InitializeRequest): InitializeRes
     agentCapabilities: {
       loadSession: true,
       promptCapabilities: { image: true, embeddedContext: true },
+      // stdio is always available; these are the remote transports we can run.
+      mcpCapabilities: { http: true, sse: true },
     },
     authMethods: [terminalAuthMethod()],
     // The ACP steering extension: a client may inject into the running turn.
@@ -213,11 +219,12 @@ export async function newSession(state: AgentState, params: NewSessionRequest): 
       'No model configured. Run `kimi` once to log in, or set default_model in config.toml.',
     );
   }
-  if ((params.mcpServers ?? []).length > 0) {
-    // M2: the client's MCP servers arrive with the session; the engine's own
-    // config still applies, so the session works without them.
-    log.warn('acp: client MCP servers are not wired yet', { count: (params.mcpServers ?? []).length });
-  }
+  // The engine snapshots the model's tool list when a session starts, so a
+  // server added afterwards is connected but invisible to the model. Client
+  // servers are therefore registered through a bootstrap session first (the
+  // workspace MCP registry is shared), then the real session starts with their
+  // tools already in place.
+  const bootstrap = await warmClientMcpServers(harness, params.cwd, params.mcpServers ?? []);
   const session = await harness.createSession({
     workDir: params.cwd,
     model,
@@ -230,6 +237,98 @@ export async function newSession(state: AgentState, params: NewSessionRequest): 
   log.info('acp: session created', { sessionId: session.id, cwd: params.cwd, model });
   scheduleSurfaceUpdates(entry);
   return { sessionId: session.id, configOptions, modes };
+}
+
+/** Map an ACP MCP server declaration onto the engine's config, or undefined. */
+function toEngineMcpServer(server: AcpMcpServer, index: number): EngineMcpServer | undefined {
+  const record = server as unknown as Record<string, unknown>;
+  const name =
+    typeof record['name'] === 'string' && record['name'].length > 0 ? record['name'] : `client-mcp-${String(index)}`;
+  const type = typeof record['type'] === 'string' ? record['type'] : undefined;
+  if (type === 'http' || type === 'sse') {
+    if (typeof record['url'] !== 'string') return undefined;
+    const headers = nameValueRecord(record['headers']);
+    return {
+      name,
+      transport: type,
+      url: record['url'],
+      deferred: false,
+      ...(headers === undefined ? {} : { headers }),
+    };
+  }
+  if (typeof record['command'] !== 'string') return undefined;
+  const args = Array.isArray(record['args'])
+    ? record['args'].filter((arg): arg is string => typeof arg === 'string')
+    : [];
+  const env = nameValueRecord(record['env']);
+  return {
+    name,
+    transport: 'stdio',
+    command: record['command'],
+    // Client-declared servers are for this prompt: expose their tools inline
+    // rather than behind the deferred-tool discovery flow.
+    deferred: false,
+    ...(args.length === 0 ? {} : { args }),
+    ...(env === undefined ? {} : { env }),
+  };
+}
+
+type EngineMcpServer = Parameters<KimiSession['addMcpServer']>[0];
+
+/**
+ * ACP spells environment variables and headers as `[{name, value}]` (v1) or a
+ * plain record (v2); the engine wants a record either way.
+ */
+function nameValueRecord(value: unknown): Record<string, string> | undefined {
+  if (Array.isArray(value)) {
+    const entries = value.flatMap((item): Array<[string, string]> => {
+      if (typeof item !== 'object' || item === null) return [];
+      const record = item as Record<string, unknown>;
+      return typeof record['name'] === 'string' && typeof record['value'] === 'string'
+        ? [[record['name'], record['value']]]
+        : [];
+    });
+    return entries.length === 0 ? undefined : Object.fromEntries(entries);
+  }
+  if (typeof value === 'object' && value !== null) {
+    return value as Record<string, string>;
+  }
+  return undefined;
+}
+
+/**
+ * Register the client's MCP servers through a throwaway session so the next
+ * session starts with their tools. A server that fails to start does not fail
+ * the session — the model simply does not see its tools.
+ */
+async function warmClientMcpServers(
+  harness: KimiHarness,
+  cwd: string,
+  servers: readonly AcpMcpServer[],
+): Promise<KimiSession | undefined> {
+  const configs = servers
+    .map((server, index) => toEngineMcpServer(server, index))
+    .filter((config): config is EngineMcpServer => config !== undefined);
+  if (configs.length === 0) {
+    if (servers.length > 0) log.warn('acp: no usable MCP server declarations', { count: servers.length });
+    return undefined;
+  }
+  try {
+    // The workspace MCP registry lives as long as the session that seeded it,
+    // so this bootstrap session is kept open beside the real one and closed
+    // with it.
+    const bootstrap = await harness.createSession({ workDir: cwd });
+    for (const config of configs) {
+      const info = await bootstrap.addMcpServer(config, { persist: false });
+      log.info('acp: client MCP server added', { name: config.name, status: info.status, tools: info.toolCount });
+    }
+    return bootstrap;
+  } catch (error) {
+    log.warn('acp: client MCP server failed', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return undefined;
+  }
 }
 
 /** Bind one engine session to the ACP session id and its handlers. */
@@ -364,6 +463,7 @@ export async function deleteSession(
     await entry.bridge.dispose();
     state.sessions.delete(params.sessionId);
   }
+  await closeMcpBootstrap(state, params.sessionId);
   const harness = await harnessOf(state);
   await harness.deleteSession(params.sessionId);
   log.info('acp: session deleted', { sessionId: params.sessionId });
@@ -376,6 +476,7 @@ export async function closeSession(state: AgentState, params: CloseSessionReques
     await entry.bridge.dispose();
     state.sessions.delete(params.sessionId);
   }
+  await closeMcpBootstrap(state, params.sessionId);
   return {};
 }
 
@@ -716,9 +817,19 @@ export function cancel(state: AgentState, params: CancelNotification): void {
   state.sessions.get(params.sessionId)?.bridge.cancel();
 }
 
+/** Close the bootstrap session that keeps client MCP servers alive. */
+async function closeMcpBootstrap(state: AgentState, sessionId: string): Promise<void> {
+  const bootstrap = state.mcpBootstrap.get(sessionId);
+  if (bootstrap === undefined) return;
+  state.mcpBootstrap.delete(sessionId);
+  await bootstrap.close().catch(() => undefined);
+}
+
 export async function close(state: AgentState): Promise<void> {
   for (const entry of state.sessions.values()) await entry.bridge.dispose();
   state.sessions.clear();
+  await Promise.all([...state.mcpBootstrap.values()].map((bootstrap) => bootstrap.close().catch(() => undefined)));
+  state.mcpBootstrap.clear();
   await state.harness?.close();
   state.harness = undefined;
 }

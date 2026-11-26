@@ -42,6 +42,10 @@ verified end to end.** Present today:
 - **protocol-level cancel**: `$/cancel_request` cancels the request it names,
   as clients that drop a request expect; `additionalDirectories` is honoured
   on `session/new`, `load` and `resume`
+- **client MCP servers**: `session/new.mcpServers` (stdio / HTTP / SSE) are
+  registered as session-local engine servers and become callable tools; because
+  the engine snapshots the tool list at session start, they are seeded through a
+  bootstrap session that stays alive with the ACP session
 - **ACP v1 and v2**: one connection routes on the client's `initialize` —
   v1 gets today's surface, v2 (experimental draft) gets `auth/login`,
   `providers/list`, the v2 update vocabulary (`tool_call_update`,

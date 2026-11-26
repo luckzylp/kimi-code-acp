@@ -443,6 +443,74 @@ async function terminalDeltaScenario() {
   });
 }
 
+/** A client-declared MCP server becomes a session-local engine server. */
+async function mcpScenario() {
+  const script = [
+    {
+      kind: 'tool',
+      id: 'call_mcp',
+      name: 'mcp__echo__echo',
+      arguments: JSON.stringify({ text: 'mcp-hello' }),
+    },
+    { kind: 'text', text: 'mcp done' },
+  ];
+  await withAgent({ script }, async ({ agent, workDir }) => {
+    const server = {
+      name: 'echo',
+      command: process.execPath,
+      args: [join(repoRoot, 'scripts', 'lib', 'mcp-echo-server.mjs')],
+      env: [],
+    };
+    await agent.request('initialize', {
+      protocolVersion: 1,
+      clientCapabilities: {},
+    });
+    agent.onRequest('session/request_permission', () => ({
+      outcome: { outcome: 'selected', optionId: 'approve_once' },
+    }));
+    const created = await agent.request('session/new', { cwd: workDir, mcpServers: [server] });
+    ok('session/new accepted a client MCP server');
+
+    // The engine connects asynchronously; wait until the server reports connected.
+    const deadline = Date.now() + 20_000;
+    let listed = '';
+    while (Date.now() < deadline) {
+      await agent.request(
+        'session/prompt',
+        { sessionId: created.sessionId, prompt: [{ type: 'text', text: '/mcp' }] },
+        30_000,
+      );
+      listed = updates(agent)
+        .filter((update) => update.sessionUpdate === 'agent_message_chunk')
+        .map((update) => update.content?.text ?? '')
+        .join('\n');
+      if (/echo\s+\[connected\]/.test(listed)) break;
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 250));
+    }
+    if (!/echo\s+\[connected\]/.test(listed)) {
+      throw new Error(`the MCP server never connected: ${listed.slice(-300)}`);
+    }
+    ok('/mcp lists the client-declared server as connected');
+
+    await agent.request(
+      'session/prompt',
+      { sessionId: created.sessionId, prompt: [{ type: 'text', text: 'use the echo tool' }] },
+      180_000,
+    );
+    const toolCards = updates(agent).filter(
+      (update) =>
+        update.sessionUpdate === 'tool_call_update' && update.toolCallId?.includes('call_mcp'),
+    );
+    if (toolCards.length === 0) throw new Error('the MCP tool call was not projected');
+    const resultText = updates(agent)
+      .filter((update) => update.sessionUpdate === 'tool_call_update')
+      .map((update) => JSON.stringify(update.content ?? ''))
+      .join('\n');
+    if (!resultText.includes('mcp-hello')) throw new Error('the MCP tool result did not come back');
+    ok('the model called the MCP tool and its result came back');
+  });
+}
+
 /** Built-in slash commands answer locally, without a model request. */
 async function commandScenario() {
   await withAgent({ script: [] }, async ({ agent, provider, workDir }) => {
@@ -787,6 +855,7 @@ await surfaceScenario();
 await promptContentScenario();
 await planScenario();
 await commandScenario();
+await mcpScenario();
 await steeringScenario();
 await cancelRequestScenario();
 await cancelDuringPermissionScenario();

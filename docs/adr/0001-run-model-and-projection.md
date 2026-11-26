@@ -196,11 +196,10 @@ Risks:
 
 ## Known limitations
 
-- **Client MCP servers** (`session/new.mcpServers`): the SDK's
-  `CreateSessionOptions` exposes no session-scoped MCP list, and
-  `harness.addMcpServer` writes the user's global config. The adapter logs and
-  ignores them rather than mutating configuration; the engine's own MCP config
-  still applies.
+- **MCP-over-ACP transport**: client-declared servers (`session/new.mcpServers`)
+  are supported as engine servers. A client that hosts an MCP connection itself
+  (`mcp/connect`) cannot be served yet: the engine's MCP client speaks only
+  stdio/SSE/HTTP.
 
 ## Alternatives rejected
 

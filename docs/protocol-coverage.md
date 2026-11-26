@@ -17,7 +17,7 @@ advertised** — the capability flag is never set, so a client does not call it;
 | `authenticate` | implemented | `src/auth.ts` — device-code flow; unknown method ids are rejected |
 | `logout` | implemented | `src/agent.ts` |
 | `providers/list`, `providers/set`, `providers/disable` | not advertised | no `providers` capability; model choice is exposed as a config option instead |
-| `session/new` | implemented | `src/agent.ts` — `additionalDirectories`, `mcpServers` logged (see MCP) |
+| `session/new` | implemented | `src/agent.ts` — `additionalDirectories`; `mcpServers` become session-local engine servers whose tools reach the model |
 | `session/load` | implemented | resume + replay in `src/replay.ts` |
 | `session/resume` | implemented | bind without replay |
 | `session/fork` | implemented | `harness.forkSession` |
@@ -47,7 +47,7 @@ opens the v1 or the v2 app. v2 requests delegate to the same session machinery;
 | `providers/list` | implemented | the engine's configured providers (read-only) |
 | `providers/set`, `providers/disable` | rejected | the engine exposes no safe provider mutation to an agent |
 | `auth/login`, `auth/logout` | implemented | device-code flow / logout |
-| `mcp/message` (+ `mcp/connect`, `mcp/disconnect`) | not supported | needs MCP-over-ACP support in the engine (see below) |
+| `mcp/message` (+ `mcp/connect`, `mcp/disconnect`) | not supported | client-declared servers work through `session/new.mcpServers`; a client-hosted MCP transport still needs an engine seam |
 | `nes/*`, `document/*` | not advertised / ignored | editor features a chat agent does not use |
 | updates | translated | message chunks, `tool_call_update`, `terminal_update`, `terminal_output_chunk`, `plan_update`, commands/config/info/usage passthrough; unknown kinds dropped |
 
@@ -59,7 +59,7 @@ opens the v1 or the v2 app. v2 requests delegate to the same session machinery;
 | `elicitation/create` | implemented | form mode when advertised; a choice-style permission request otherwise |
 | `fs/read_text_file`, `fs/write_text_file` | not used | the engine reads and writes in-process (ADR Decision 3) |
 | `terminal/create`, `terminal/output`, `terminal/wait_for_exit`, `terminal/kill`, `terminal/release` | not used | command execution belongs to the engine; the client gets a display terminal through `_meta` (`terminal_info`, `terminal_output` or `terminal_output_delta`, `terminal_exit`) |
-| `mcp/connect`, `mcp/message`, `mcp/disconnect` | **blocked** | MCP-over-ACP would need the engine's MCP client to accept an ACP-provided transport; its transports are stdio/SSE/HTTP only (`agent-core-v2/src/mcpCore/`). The engine's own MCP config still applies to every session |
+| `mcp/connect`, `mcp/message`, `mcp/disconnect` | **blocked** (transport form) | client-declared servers from `session/new.mcpServers` (stdio/HTTP/SSE) **are** supported — they are registered as engine servers and their tools reach the model. A client-hosted MCP connection over ACP (`mcp/connect`) still has no engine seam: its transports are stdio/SSE/HTTP only (`agent-core-v2/src/mcpCore/`) |
 
 ## Session updates
 
