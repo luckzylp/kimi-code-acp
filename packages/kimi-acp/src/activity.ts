@@ -9,7 +9,7 @@
  */
 import { randomUUID } from 'node:crypto';
 
-import type { PlanEntry, SessionNotification } from '@agentclientprotocol/sdk';
+import type { PlanEntry, SessionNotification } from '@agentclientprotocol/sdk/unstable';
 
 /** The goal state this projection reads (engine `GoalSnapshot`). */
 export interface GoalSnapshotLike {

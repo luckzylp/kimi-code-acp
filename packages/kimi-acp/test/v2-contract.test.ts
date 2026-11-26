@@ -7,7 +7,7 @@ type Schema = { safeParse: (value: unknown) => { success: boolean; error?: { iss
 
 const zod = (await import(
   new URL(
-    '../node_modules/@agentclientprotocol/sdk/dist/v2/schema/zod.gen.js',
+    '../node_modules/@agentclientprotocol/sdk-v1/dist/v2/schema/zod.gen.js',
     import.meta.url,
   ).href
 )) as Record<string, Schema>;

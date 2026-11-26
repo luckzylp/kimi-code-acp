@@ -19,7 +19,7 @@ import type {
   SessionNotification,
   StopReason,
   ToolCallUpdate,
-} from '@agentclientprotocol/sdk';
+} from '@agentclientprotocol/sdk/unstable';
 import type { Event, PromptPart, Session as KimiSession } from '@moonshot-ai/kimi-code-sdk';
 
 import {
@@ -69,6 +69,8 @@ export interface SessionBridgeOptions {
   readonly shadowTerminals: boolean;
   /** The client appends `_meta.terminal_output_delta` chunks itself. */
   readonly terminalOutputDelta?: boolean;
+  /** The client renders a predicted next prompt (`session.promptSuggestions`). */
+  readonly promptSuggestions?: boolean;
   readonly send: (notification: SessionNotification) => Promise<void> | void;
 }
 
@@ -79,6 +81,8 @@ export class SessionBridge {
   private readonly toolCalls: ToolCalls;
   private readonly unsubscribe: () => void;
   private run: Run | undefined;
+  /** The last turn id the engine reported, for `predictNextPrompt`. */
+  private lastTurnId: number | undefined;
   private disposed = false;
   private messageId: string | undefined;
   /** The goal currently on screen, so changes update its card instead of adding one. */
@@ -281,6 +285,7 @@ export class SessionBridge {
         return;
       }
       case 'turn.ended': {
+        this.lastTurnId = event.turnId;
         this.assistant.flushNow();
         this.thought.flushNow();
         this.messageId = undefined;
@@ -439,6 +444,37 @@ export class SessionBridge {
     void this.outbox.drain().then(() => {
       run.resolve(reason);
     });
+    void this.suggestNextPrompt();
+  }
+
+  /**
+   * Ask the engine to predict the user's next prompt and publish it as ACP's
+   * `prompt_suggestions_update`. Gated on the client capability: a prediction
+   * costs one model request per turn.
+   */
+  private async suggestNextPrompt(): Promise<void> {
+    if (this.options.promptSuggestions !== true || this.disposed) return;
+    const expectedTurnId = this.lastTurnId;
+    if (expectedTurnId === undefined) return;
+    try {
+      const text = await this.options.session.predictNextPrompt({
+        predictionId: randomUUID(),
+        expectedTurnId,
+      });
+      if (this.disposed) return;
+      await this.post({
+        sessionId: this.options.sessionId,
+        update: {
+          sessionUpdate: 'prompt_suggestions_update',
+          suggestions: text === null ? [] : [{ prompt: [{ type: 'text', text }] }],
+        },
+      });
+    } catch (error) {
+      log.warn('acp: prompt prediction failed', {
+        sessionId: this.sessionId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   private fail(run: Run, error: unknown): void {

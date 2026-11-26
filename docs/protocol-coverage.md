@@ -1,8 +1,10 @@
 # ACP protocol coverage
 
-Audit of the adapter against the ACP v1 schema shipped with
-`@agentclientprotocol/sdk@1.3.0` (`schema/schema.json`), as of
-`@moonshot-ai/kimi-code-acp@0.11.0` on `@moonshot-ai/kimi-code@2.8.1`.
+Audit of the adapter against the ACP schemas shipped with
+`@agentclientprotocol/sdk@2.12.0` (v1 uses its `unstable` surface,
+`schema/v1/schema.unstable.json`; v2 is pinned to the 1.3.0 draft through the
+`@agentclientprotocol/sdk-v1` npm alias), as of
+`@moonshot-ai/kimi-code-acp@0.14.0` on `@moonshot-ai/kimi-code@2.8.1`.
 
 Legend: **implemented** — advertised and handled; **not used** — the client
 capability exists, but this agent intentionally does not use it; **not
@@ -77,6 +79,7 @@ opens the v1 or the v2 app. v2 requests delegate to the same session machinery;
 | `config_option_update` | implemented | model / thinking / mode changes |
 | `session_info_update` | implemented | engine-generated titles (`session.meta.updated`) |
 | `usage_update` | implemented | after setup, each turn end, and configuration changes |
+| `prompt_suggestions_update` | implemented | after each turn when the client advertises `session.promptSuggestions` and the engine's `prompt_prediction` experiment is on; empty list clears |
 
 ## Beyond the wire
 

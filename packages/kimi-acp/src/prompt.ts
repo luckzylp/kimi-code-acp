@@ -12,7 +12,7 @@
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
-import type { ContentBlock } from '@agentclientprotocol/sdk';
+import type { ContentBlock } from '@agentclientprotocol/sdk/unstable';
 import type { Session as KimiSession } from '@moonshot-ai/kimi-code-sdk';
 import type { PromptPart } from '@moonshot-ai/kimi-code-sdk';
 

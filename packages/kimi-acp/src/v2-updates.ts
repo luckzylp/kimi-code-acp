@@ -17,7 +17,7 @@
  */
 import { randomUUID } from 'node:crypto';
 
-import type { SessionNotification } from '@agentclientprotocol/sdk';
+import type { SessionNotification } from '@agentclientprotocol/sdk/unstable';
 
 type V2Update = Record<string, unknown>;
 

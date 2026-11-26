@@ -11,7 +11,7 @@
  * A command answers with text in the transcript, or with a prompt to submit
  * (`/swarm <task>` turns swarm mode on and then submits the task).
  */
-import type { AvailableCommand } from '@agentclientprotocol/sdk';
+import type { AvailableCommand } from '@agentclientprotocol/sdk/unstable';
 import type { KimiHarness, Session as KimiSession } from '@moonshot-ai/kimi-code-sdk';
 
 import { modelEntries, type AcpModeId } from './config-options';

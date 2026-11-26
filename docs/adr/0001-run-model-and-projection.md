@@ -65,6 +65,18 @@ upstream tree is a build input, and the tag is the only pin. The copy is
 disposable because pnpm does not treat a symlinked directory as a workspace
 package; a build therefore refreshes it instead of linking it.
 
+### Two SDK surfaces
+
+The adapter depends on the ACP SDK twice. v1 uses `@agentclientprotocol/sdk@2.12`'s
+`unstable` entry, a superset of stable that carries prompt suggestions,
+`providers/list`, session fork and the cursors the AIR rewind extension needs.
+The v2 draft changes shape between SDK releases (2.12 renamed methods, removed
+`mcp/connect`, and requires a `messageId` in the prompt response), while the
+client side of that draft moves independently; the v2 app therefore stays
+pinned to the 1.3.0 draft through an npm alias (`@agentclientprotocol/sdk-v1`)
+that the verified suite targets. The 2.12 protocol router negotiates both
+versions on one connection.
+
 ## Decision 2 — A client prompt is a *run*, and the run ends with its turn
 
 A **run** is one `session/prompt` request. Engine 2.8 runs a prompt as one

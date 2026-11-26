@@ -17,7 +17,7 @@
  * The record shape is structural on purpose: the SDK's replay type is generated
  * from the engine and this projection only reads the message fields.
  */
-import type { SessionNotification } from '@agentclientprotocol/sdk';
+import type { SessionNotification } from '@agentclientprotocol/sdk/unstable';
 
 import { goalCard, planNotification, type GoalSnapshotLike, type TodoLike } from './activity';
 import { describeEngineTurn, isAutonomousOrigin } from './engine-turn';

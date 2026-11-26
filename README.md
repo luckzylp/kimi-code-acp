@@ -60,6 +60,10 @@ verified end to end.** Present today:
   `plan_update`, native `terminal_update` / `terminal_output_chunk`, explicit
   `state_update` running/idle) and a `session/prompt` response without a stop
   reason; both share the same engine session machinery
+- **prompt suggestions**: after each turn the engine predicts the user's next
+  prompt and it is published as `prompt_suggestions_update` — gated on the
+  client advertising `session.promptSuggestions` and on the engine's
+  `prompt_prediction` experiment (`KIMI_CODE_EXPERIMENTAL_PROMPT_PREDICTION=1`)
 - **goal control**: the AIR `_session/goal` extension (`set` / `clear`) drives the
   engine's goal and keeps the goal card in sync with `/goal`
 - **steering**: the `_session/steering` extension injects a follow-up into the
@@ -152,6 +156,13 @@ transitive tree, which is why the cache layout used to hold ~34 entries.)
 
 Point Zed at the installed bin (or at `packages/kimi-acp/dist/main.mjs`) as a
 custom agent command: `node <absolute path>`.
+
+Two SDK surfaces sit behind that one command. v1 speaks
+`@agentclientprotocol/sdk@2.12.0`'s **unstable** entry — a superset of stable
+that carries prompt suggestions, providers and session fork. The v2 draft moves
+faster than clients can follow, so the v2 app stays pinned to the 1.3.0 draft
+through an npm alias (`@agentclientprotocol/sdk-v1`) that its verified
+end-to-end suite targets; the 2.12 router still negotiates both versions.
 
 A warm pnpm store cuts a cold install from tens of minutes to seconds:
 

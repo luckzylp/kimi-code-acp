@@ -10,7 +10,7 @@
  * feeds AIR's own panel, and a `session_info_update` without a title would
  * clear the thread title in clients that treat it as authoritative.
  */
-import { RequestError } from '@agentclientprotocol/sdk';
+import { RequestError } from '@agentclientprotocol/sdk/unstable';
 
 export const GOAL_METHOD = '_session/goal';
 

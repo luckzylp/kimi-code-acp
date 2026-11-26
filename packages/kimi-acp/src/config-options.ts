@@ -5,7 +5,7 @@
  * derived from the live engine state on every call — a session can change its
  * model elsewhere (TUI, another window), so nothing here is cached.
  */
-import type { SessionConfigOption, SessionConfigSelectOption, SessionMode } from '@agentclientprotocol/sdk';
+import type { SessionConfigOption, SessionConfigSelectOption, SessionMode } from '@agentclientprotocol/sdk/unstable';
 import type { SessionStatus } from '@moonshot-ai/kimi-code-sdk';
 
 export const ACP_MODES = [

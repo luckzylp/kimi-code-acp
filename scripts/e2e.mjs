@@ -39,7 +39,10 @@ async function withAgent(options, body) {
   const provider = await startFakeProvider(options);
   const homeDir = writeFakeHome({ baseUrl: provider.baseUrl });
   const workDir = mkdtempSync(join(tmpdir(), 'kimi-acp-work-'));
-  const agent = spawnAgent(mainPath, { homeDir, env: { KIMI_ACP_DEBUG: '1' } });
+  const agent = spawnAgent(mainPath, {
+    homeDir,
+    env: { KIMI_ACP_DEBUG: '1', ...(options.env ?? {}) },
+  });
   let failed = false;
   try {
     await body({ agent, provider, workDir });
@@ -609,6 +612,54 @@ async function mcpAcpScenario() {
   });
 }
 
+/**
+ * Prompt suggestions: with the engine's prediction experiment on and the client
+ * advertising `session.promptSuggestions`, a turn publishes the predicted next
+ * prompt as ACP's `prompt_suggestions_update`.
+ */
+async function suggestionScenario() {
+  await withAgent(
+    {
+      script: [
+        { kind: 'text', text: 'the answer' },
+        { kind: 'text', text: JSON.stringify({ show: 'yes', message: 'run the tests' }) },
+      ],
+      env: { KIMI_CODE_EXPERIMENTAL_PROMPT_PREDICTION: '1' },
+    },
+    async ({ agent, workDir }) => {
+      await agent.request('initialize', {
+        protocolVersion: 1,
+        clientCapabilities: { session: { promptSuggestions: {} } },
+      });
+      agent.onRequest('session/request_permission', () => ({
+        outcome: { outcome: 'selected', optionId: 'approve_once' },
+      }));
+      const created = await agent.request('session/new', { cwd: workDir, mcpServers: [] });
+      await agent.request(
+        'session/prompt',
+        { sessionId: created.sessionId, prompt: [{ type: 'text', text: 'hello' }] },
+        60_000,
+      );
+      await waitFor(
+        () =>
+          updates(agent).some(
+            (update) =>
+              update.sessionUpdate === 'prompt_suggestions_update' &&
+              (update.suggestions ?? []).length > 0,
+          ),
+        20_000,
+        'the prompt suggestion',
+      );
+      const suggestion = updates(agent)
+        .filter((update) => update.sessionUpdate === 'prompt_suggestions_update')
+        .at(-1);
+      const text = suggestion.suggestions?.[0]?.prompt?.[0]?.text;
+      if (text !== 'run the tests') throw new Error(`unexpected suggestion: ${JSON.stringify(text)}`);
+      ok('prompt_suggestions_update carried the predicted prompt');
+    },
+  );
+}
+
 /** AIR's `_session/goal`: set and clear the goal, reflected in the goal card. */
 async function goalExtensionScenario() {
   // A goal can start a continuation turn; give the fake provider an answer.
@@ -1038,6 +1089,7 @@ await surfaceScenario();
 await promptContentScenario();
 await planScenario();
 await commandScenario();
+await suggestionScenario();
 await goalExtensionScenario();
 await mcpScenario();
 await mcpAcpScenario();

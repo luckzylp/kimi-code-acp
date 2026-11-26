@@ -12,7 +12,7 @@
  * `document/*` (editor features a chat agent does not use). `providers/*` are
  * served read-only and mapped from the engine's configured providers.
  */
-import * as v2 from '@agentclientprotocol/sdk/experimental/v2';
+import * as v2 from '@agentclientprotocol/sdk-v1/experimental/v2';
 
 import {
   authenticate,

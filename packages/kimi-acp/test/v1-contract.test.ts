@@ -7,7 +7,7 @@ type Schema = { safeParse: (value: unknown) => { success: boolean; error?: { iss
 
 const zod = (await import(
   new URL(
-    '../node_modules/@agentclientprotocol/sdk/dist/schema/zod.gen.js',
+    '../node_modules/@agentclientprotocol/sdk/dist/v1/unstable/schema/zod.gen.js',
     import.meta.url,
   ).href
 )) as Record<string, Schema>;
@@ -80,6 +80,13 @@ const updates: Array<[string, Record<string, unknown>]> = [
   ],
   ['session_info_update', { sessionUpdate: 'session_info_update', title: 'A title' }],
   ['usage_update', { sessionUpdate: 'usage_update', used: 10, size: 100 }],
+  [
+    'prompt_suggestions_update',
+    {
+      sessionUpdate: 'prompt_suggestions_update',
+      suggestions: [{ prompt: [{ type: 'text', text: 'run the tests' }] }],
+    },
+  ],
 ];
 
 describe('v1 wire contract', () => {

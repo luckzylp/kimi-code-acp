@@ -11,7 +11,7 @@
  * with a normal `session/prompt`; without the opt-in, the adapter starts a
  * detached turn and answers `startedNewTurn` (the compatibility default).
  */
-import { RequestError, type ContentBlock } from '@agentclientprotocol/sdk';
+import { RequestError, type ContentBlock } from '@agentclientprotocol/sdk/unstable';
 
 export const STEER_METHOD = '_session/steering';
 

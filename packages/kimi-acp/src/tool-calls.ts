@@ -23,7 +23,7 @@ import type {
   ToolCallStatus,
   ToolKind,
   ToolCallUpdate,
-} from '@agentclientprotocol/sdk';
+} from '@agentclientprotocol/sdk/unstable';
 import type { ToolCallDeltaEvent, ToolCallStartedEvent, ToolResultEvent, ToolUpdatedEvent } from '@moonshot-ai/kimi-code-sdk';
 import type { ToolInputDisplay } from '@moonshot-ai/agent-core-v2/tool/toolInputDisplay';
 

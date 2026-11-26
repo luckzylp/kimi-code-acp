@@ -17,6 +17,8 @@ export interface ClientCapabilities {
   readonly fsRead: boolean;
   /** `fs.writeTextFile`: the client serves file writes. */
   readonly fsWrite: boolean;
+  /** `session.promptSuggestions`: the client renders a predicted next prompt. */
+  readonly promptSuggestions: boolean;
 }
 
 const NONE: ClientCapabilities = {
@@ -25,11 +27,13 @@ const NONE: ClientCapabilities = {
   elicitationForm: false,
   fsRead: false,
   fsWrite: false,
+  promptSuggestions: false,
 };
 
 type CapabilitiesCarrier =
   | {
       readonly _meta?: Record<string, unknown> | null | undefined;
+      readonly session?: unknown;
       readonly fs?: { readonly readTextFile?: boolean; readonly writeTextFile?: boolean } | null | undefined;
       readonly elicitation?: { readonly form?: object | null } | null | undefined;
     }
@@ -43,11 +47,13 @@ function metaFlag(meta: Record<string, unknown> | null | undefined, key: string)
 export function readClientCapabilities(capabilities: CapabilitiesCarrier): ClientCapabilities {
   const meta = capabilities?._meta;
   const delta = metaFlag(meta, 'terminal_output_delta');
+  const session = capabilities?.session as { readonly promptSuggestions?: unknown } | null | undefined;
   return {
     terminalOutput: delta || metaFlag(meta, 'terminal_output'),
     terminalOutputDelta: delta,
     elicitationForm: capabilities?.elicitation?.form !== undefined && capabilities?.elicitation?.form !== null,
     fsRead: capabilities?.fs?.readTextFile === true,
     fsWrite: capabilities?.fs?.writeTextFile === true,
+    promptSuggestions: session?.promptSuggestions != null,
   };
 }

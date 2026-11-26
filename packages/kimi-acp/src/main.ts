@@ -60,7 +60,9 @@ redirectConsoleToStderr();
 const state = createAgentState();
 const { app } = createAgentApp(state);
 const { app: v2App } = createV2App(state);
-const router = agentProtocolRouter().withV1(app).withV2(v2App);
+const router = agentProtocolRouter()
+  .withV1(app as never)
+  .withV2(v2App as never);
 const connection = router.connect(
   ndJsonStreamV2(
     Writable.toWeb(process.stdout) as WritableStream<Uint8Array>,

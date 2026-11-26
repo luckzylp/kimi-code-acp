@@ -12,7 +12,7 @@
  * The flow writes the verification URL and code to stdout, which is what the
  * user needs in the terminal window the client opened.
  */
-import type { AuthMethod } from '@agentclientprotocol/sdk';
+import type { AuthMethod } from '@agentclientprotocol/sdk/unstable';
 import { createKimiHarness, type KimiHarness } from '@moonshot-ai/kimi-code-sdk';
 
 import { AGENT_NAME, VERSION } from './version';

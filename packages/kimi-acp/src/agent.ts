@@ -53,7 +53,7 @@ import {
   type CreateElicitationResponse,
   methods,
   RequestError,
-} from '@agentclientprotocol/sdk';
+} from '@agentclientprotocol/sdk/unstable';
 import {
   createKimiHarness,
   type KimiHarness,
@@ -374,6 +374,7 @@ async function registerSession(state: AgentState, session: KimiSession): Promise
     // output even though the client never sent v1's terminal capability.
     shadowTerminals: state.capabilities.terminalOutput || v2 !== undefined,
     terminalOutputDelta: state.capabilities.terminalOutputDelta,
+    promptSuggestions: state.capabilities.promptSuggestions,
     send: async (notification) => {
       if (client !== undefined) {
         await client.notify(methods.client.session.update, notification);
