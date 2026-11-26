@@ -418,7 +418,10 @@ async function v2Scenario() {
     if (terminalChunks.length === 0) {
       throw new Error(`v2 terminal produced no output chunk; kinds=${updates(agent).map((u) => u.sessionUpdate).join(',')}`);
     }
-    const terminalOutput = terminalChunks.map((update) => update.data ?? '').join('');
+    // v2 terminal payloads are base64, as Zed's client decodes them.
+    const terminalOutput = terminalChunks
+      .map((update) => Buffer.from(update.data ?? '', 'base64').toString('utf8'))
+      .join('');
     if (!terminalOutput.includes('v2-tool')) throw new Error('v2 terminal chunk lacked the output');
     ok('v2 tool turn: tool_call_update, permission request, terminal_output_chunk');
 

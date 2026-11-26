@@ -56,7 +56,7 @@ describe('toV2Updates', () => {
     expect(updates).toContainEqual({
       sessionUpdate: 'terminal_output_chunk',
       terminalId: 't1',
-      data: 'hello\n',
+      data: Buffer.from('hello\n', 'utf8').toString('base64'),
     });
 
     const exited = toV2Updates(

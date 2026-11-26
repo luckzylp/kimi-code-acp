@@ -784,7 +784,18 @@ export async function prompt(
   let parts: readonly PromptPart[] = built.parts;
   const slash = built.text.length === 0 ? null : parseSlashCommand(built.text);
   if (slash !== null) {
-    const reply = await runBuiltinCommand(slash.name, slash.args, runtime);
+    let reply;
+    try {
+      reply = await runBuiltinCommand(slash.name, slash.args, runtime);
+    } catch (error) {
+      // A command that the engine refuses (compact with nothing to compact,
+      // an unknown model alias) belongs in the transcript, not as a failed
+      // prompt with an opaque JSON-RPC error.
+      const message = error instanceof Error ? error.message : String(error);
+      log.warn('acp: command failed', { command: slash.name, error: message });
+      await entry.bridge.note(`Command failed: ${message}`);
+      return { stopReason: 'end_turn' };
+    }
     if (reply !== null) {
       if (reply.text !== undefined) await entry.bridge.note(reply.text);
       if (reply.prompt === undefined) return { stopReason: 'end_turn' };

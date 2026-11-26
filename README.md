@@ -122,10 +122,18 @@ Signing in, once the bundle is installed:
 node packages/kimi-acp/dist/main.mjs login   # device-code flow in this terminal
 ```
 
-`npm run verify` runs typecheck, unit tests, build, smoke and e2e in order.
-The unit suite includes **wire-contract tests**: every v1 and v2 update the
-adapter can emit is parsed by the ACP SDK's own zod schemas, so a shape drift
-fails the build instead of a client.
+`npm run verify` runs typecheck, unit tests, build, smoke, e2e and the
+protocol suite in order. The unit suite includes **wire-contract tests**: every
+v1 and v2 update the adapter can emit is parsed by the ACP SDK's own zod
+schemas, so a shape drift fails the build instead of a client.
+
+`npm run test:protocol` runs **one case per client-visible behaviour** —
+handshake capabilities, session lifecycle, prompts (text/image/resource/
+cancel), permissions, shadow terminals, every supported TUI command with
+normal and failing arguments, and the v2 draft — against a real engine and a
+fake provider. The expectations come from Zed's client
+([`docs/zed-acp-behavior.md`](docs/zed-acp-behavior.md)), so the suite doubles
+as a record of what the client actually needs.
 
 ## Installable artifact
 

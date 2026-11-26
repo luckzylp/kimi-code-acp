@@ -14,8 +14,9 @@
     "typecheck": "node scripts/typecheck.mjs",
     "smoke": "node scripts/smoke.mjs",
     "e2e": "node scripts/e2e.mjs",
-    "verify": "npm run typecheck && npm run test && npm run build && npm run smoke && npm run e2e && npm run pack",
+    "verify": "npm run typecheck && npm run test && npm run build && npm run smoke && npm run e2e && npm run test:protocol && npm run pack",
     "pack": "node scripts/pack.mjs",
-    "test": "node scripts/test.mjs"
+    "test": "node scripts/test.mjs",
+    "test:protocol": "node scripts/protocol-suite.mjs"
   }
 }

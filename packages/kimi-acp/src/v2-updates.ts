@@ -65,7 +65,13 @@ export function toV2Updates(notification: SessionNotification): V2Update[] {
       const out: V2Update[] = [base];
       const output = meta?.['terminal_output'] as { terminal_id?: string; data?: string } | undefined;
       if (typeof output?.terminal_id === 'string' && typeof output.data === 'string') {
-        out.push({ sessionUpdate: 'terminal_output_chunk', terminalId: output.terminal_id, data: output.data });
+        // v2 terminal payloads are base64 (Zed decodes them with STANDARD.decode);
+        // v1's `_meta.terminal_output` is raw UTF-8 text.
+        out.push({
+          sessionUpdate: 'terminal_output_chunk',
+          terminalId: output.terminal_id,
+          data: Buffer.from(output.data, 'utf8').toString('base64'),
+        });
       }
       const exit = meta?.['terminal_exit'] as
         | { terminal_id?: string; exit_code?: number; signal?: string | null }
