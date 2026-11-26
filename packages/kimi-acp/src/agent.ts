@@ -42,6 +42,7 @@ import {
   type LogoutResponse,
   type SetSessionConfigOptionRequest,
   type SetSessionConfigOptionResponse,
+  type AvailableCommand,
   type SessionConfigOption,
   type SessionModeState,
   type RequestPermissionRequest,
@@ -51,10 +52,23 @@ import {
   methods,
   RequestError,
 } from '@agentclientprotocol/sdk';
-import { createKimiHarness, type KimiHarness, type Session as KimiSession } from '@moonshot-ai/kimi-code-sdk';
+import {
+  createKimiHarness,
+  type KimiHarness,
+  type PromptPart,
+  type Session as KimiSession,
+} from '@moonshot-ai/kimi-code-sdk';
 
 import { LOGIN_METHOD_ID, terminalAuthMethod } from './auth';
 import { readClientCapabilities, type ClientCapabilities } from './capabilities';
+import {
+  availableBuiltinCommands,
+  expandPluginBody,
+  parseSlashCommand,
+  pluginSlashCommands,
+  runBuiltinCommand,
+  type CommandRuntime,
+} from './commands';
 import {
   ACP_MODES,
   acpModeToToggles,
@@ -66,6 +80,13 @@ import {
 import { log } from './log';
 import { buildPrompt } from './prompt';
 import { projectReplay, type ReplayRecord } from './replay';
+import {
+  parseSteerRequest,
+  STEER_METHOD,
+  STEERING_CAPABILITY,
+  type SteerRequest,
+  type SteerResponse,
+} from './steering';
 import { SessionBridge } from './session';
 import { toolKind } from './tool-calls';
 import { AGENT_NAME, VERSION } from './version';
@@ -113,6 +134,7 @@ export function createAgentApp(): { app: AgentApp; close: () => Promise<void> } 
     .onRequest('authenticate', (context) => authenticate(state, context.params))
     .onRequest('logout', (context) => logout(state, context.params))
     .onRequest('session/set_mode', (context) => setMode(state, context.params))
+    .onRequest(STEER_METHOD, parseSteerRequest, (context) => steerRequest(state, context.params))
     .onRequest('session/set_config_option', (context) => setConfigOption(state, context.params))
     .onRequest('session/prompt', (context) => prompt(state, context.params, context.signal))
     .onNotification('session/cancel', (context) => {
@@ -135,6 +157,8 @@ function initialize(state: AgentState, params: InitializeRequest): InitializeRes
       promptCapabilities: { image: true, embeddedContext: true },
     },
     authMethods: [terminalAuthMethod()],
+    // The ACP steering extension: a client may inject into the running turn.
+    _meta: { ...STEERING_CAPABILITY },
   };
 }
 
@@ -204,6 +228,7 @@ async function registerSession(state: AgentState, session: KimiSession): Promise
     sessionId: session.id,
     session,
     shadowTerminals: state.capabilities.terminalOutput,
+    terminalOutputDelta: state.capabilities.terminalOutputDelta,
     send: (notification) => client.notify(methods.client.session.update, notification),
   });
   wireApprovals(state, bridge, session);
@@ -219,9 +244,27 @@ async function registerSession(state: AgentState, session: KimiSession): Promise
  */
 function scheduleSurfaceUpdates(entry: SessionEntry): void {
   setTimeout(() => {
-    void entry.bridge.emitCommands();
-    void entry.bridge.emitUsage();
+    void (async () => {
+      await entry.bridge.emitCommands(await availableCommands(entry.session));
+      await entry.bridge.emitUsage();
+    })();
   }, 0);
+}
+
+/** Built-in commands + plugin commands + skills, as ACP advertises them. */
+async function availableCommands(session: KimiSession): Promise<AvailableCommand[]> {
+  const plugins = await pluginSlashCommands(session);
+  let skills: AvailableCommand[] = [];
+  try {
+    skills = (await session.listSkills()).map((skill) => ({
+      name: skill.name,
+      description: skill.description,
+      input: { hint: 'arguments' },
+    }));
+  } catch {
+    skills = [];
+  }
+  return [...availableBuiltinCommands(), ...plugins.advertised, ...skills];
 }
 
 /**
@@ -376,6 +419,33 @@ async function setConfigOption(
 }
 
 /**
+ * `_session/steering`: inject a follow-up into the running turn. When the
+ * session is idle, the compatibility default starts a detached turn; a client
+ * that opts into `idleBehavior: 'promptRequired'` starts it itself.
+ */
+async function steerRequest(state: AgentState, params: SteerRequest): Promise<SteerResponse> {
+  const entry = state.sessions.get(params.sessionId);
+  if (entry === undefined) throw RequestError.invalidParams(undefined, 'unknown session');
+  const built = await buildPrompt(entry.session, params.prompt);
+  if (built.parts.length === 0) throw RequestError.invalidParams(undefined, 'the steer has no content');
+  if (!entry.bridge.isBusy()) {
+    if (params._meta?.steering?.idleBehavior === 'promptRequired') {
+      return { outcome: 'promptRequired', reason: 'noRunningTurn' };
+    }
+    // Detached, for compatibility with clients that steer into an idle session.
+    void entry.bridge.prompt(built.parts).catch((error: unknown) => {
+      log.warn('acp: detached steer turn failed', {
+        sessionId: params.sessionId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+    return { outcome: 'startedNewTurn' };
+  }
+  await entry.bridge.steer(built.parts);
+  return { outcome: 'injected' };
+}
+
+/**
  * `authenticate`: the terminal auth method opens the device-code flow in the
  * client's terminal; a client that calls `authenticate` directly gets the same
  * flow, with the URL written to this agent's stderr.
@@ -506,6 +576,35 @@ async function prompt(
   if (signal.aborted) return { stopReason: 'cancelled' };
   const built = await buildPrompt(entry.session, params.prompt);
   if (built.parts.length === 0) throw RequestError.invalidParams(undefined, 'the prompt has no content');
+  const runtime: CommandRuntime = {
+    sessionId: entry.session.id,
+    session: entry.session,
+    harness: await harnessOf(state),
+    setMode: (mode) => applyMode(entry.session, mode),
+  };
+  let parts: readonly PromptPart[] = built.parts;
+  const slash = built.text.length === 0 ? null : parseSlashCommand(built.text);
+  if (slash !== null) {
+    const reply = await runBuiltinCommand(slash.name, slash.args, runtime);
+    if (reply !== null) {
+      if (reply.text !== undefined) await entry.bridge.note(reply.text);
+      if (reply.prompt === undefined) return { stopReason: 'end_turn' };
+      parts = [{ type: 'text', text: reply.prompt }];
+    } else {
+      const plugins = await pluginSlashCommands(entry.session);
+      const body = plugins.bodies.get(slash.name);
+      if (body !== undefined) {
+        parts = [{ type: 'text', text: expandPluginBody(body, slash.args) }];
+      }
+    }
+  }
+  // A prompt that arrives while a run is live is steered into it instead of
+  // being rejected; the running turn's own updates carry the answer.
+  if (entry.bridge.isBusy()) {
+    await entry.bridge.steer(parts);
+    await entry.bridge.note('Message steered into the running turn.');
+    return { stopReason: 'end_turn' };
+  }
   const skill = built.text.length === 0 ? undefined : await matchSkill(entry.session, built.text);
   // A protocol-level `$/cancel_request` aborts this request's signal; the run
   // has to be cancelled with it, not left waiting for the model.
@@ -514,7 +613,7 @@ async function prompt(
   };
   signal.addEventListener('abort', onAbort, { once: true });
   try {
-    const stopReason = await entry.bridge.prompt(built.parts, skill);
+    const stopReason = await entry.bridge.prompt(parts, skill);
     if (stopReason === 'end_turn') {
       void entry.bridge.emitUsage();
       void maybeGenerateTitle(state, entry);

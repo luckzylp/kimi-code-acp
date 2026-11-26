@@ -14,7 +14,12 @@
  */
 import { randomUUID } from 'node:crypto';
 
-import type { SessionNotification, StopReason, ToolCallUpdate } from '@agentclientprotocol/sdk';
+import type {
+  AvailableCommand,
+  SessionNotification,
+  StopReason,
+  ToolCallUpdate,
+} from '@agentclientprotocol/sdk';
 import type { Event, PromptPart, Session as KimiSession } from '@moonshot-ai/kimi-code-sdk';
 
 import {
@@ -51,6 +56,8 @@ export interface SessionBridgeOptions {
   readonly session: KimiSession;
   /** `_meta.terminal_output` is rendered by this client. */
   readonly shadowTerminals: boolean;
+  /** The client appends `_meta.terminal_output_delta` chunks itself. */
+  readonly terminalOutputDelta?: boolean;
   readonly send: (notification: SessionNotification) => Promise<void> | void;
 }
 
@@ -61,6 +68,7 @@ export class SessionBridge {
   private readonly toolCalls: ToolCalls;
   private readonly unsubscribe: () => void;
   private run: Run | undefined;
+  private disposed = false;
   private messageId: string | undefined;
   /** The goal currently on screen, so changes update its card instead of adding one. */
   private goalId: string | undefined;
@@ -73,6 +81,7 @@ export class SessionBridge {
       sessionId: options.sessionId,
       cwd: () => options.session.workDir,
       shadowTerminals: options.shadowTerminals,
+      terminalOutputDelta: options.terminalOutputDelta === true,
       emit: (notification) => {
         void this.outbox.push(notification);
       },
@@ -88,7 +97,25 @@ export class SessionBridge {
 
   /** Post one notification through the ordered outbox (used by `session/load` replay). */
   post(notification: SessionNotification): Promise<void> {
+    // A client may close right after a response; late pushes are dropped rather
+    // than surfacing "Session is closed" in the transcript.
+    if (this.disposed) return Promise.resolve();
     return this.outbox.push(notification);
+  }
+
+  /** True while a run owns the session (a prompt is in flight). */
+  isBusy(): boolean {
+    return this.run !== undefined && !this.run.settled;
+  }
+
+  /** Inject a message into the running turn (ACP `_session/steering`). */
+  async steer(parts: readonly PromptPart[]): Promise<void> {
+    await this.options.session.steer(parts as PromptPart[]);
+  }
+
+  /** Write a one-line system message into the transcript. */
+  async note(text: string): Promise<void> {
+    await this.post(notice(this.options.sessionId, text));
   }
 
   /** Resolve once every queued update has been written. */
@@ -131,6 +158,7 @@ export class SessionBridge {
 
   /** Push `usage_update` from the engine's live context counters. */
   async emitUsage(): Promise<void> {
+    if (this.disposed) return;
     try {
       const status = await this.options.session.getStatus();
       if (status.maxContextTokens <= 0) return;
@@ -148,18 +176,14 @@ export class SessionBridge {
   }
 
   /** Advertise the session's skills as slash commands. */
-  async emitCommands(): Promise<void> {
+  async emitCommands(commands: readonly AvailableCommand[]): Promise<void> {
+    if (this.disposed) return;
     try {
-      const skills = await this.options.session.listSkills();
       await this.post({
         sessionId: this.options.sessionId,
         update: {
           sessionUpdate: 'available_commands_update',
-          availableCommands: skills.map((skill) => ({
-            name: skill.name,
-            description: skill.description,
-            input: { hint: 'arguments' },
-          })),
+          availableCommands: [...commands],
         },
       });
     } catch (error) {
@@ -178,6 +202,7 @@ export class SessionBridge {
   }
 
   async dispose(): Promise<void> {
+    this.disposed = true;
     this.unsubscribe();
     this.toolCalls.dispose();
     this.assistant.flushNow();

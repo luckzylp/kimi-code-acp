@@ -29,6 +29,7 @@ advertised** — the capability flag is never set, so a client does not call it;
 | `session/prompt` | implemented | run model, text/image/resource blocks |
 | `session/cancel` | implemented | cancels the run, including a pending permission dialog |
 | `$/cancel_request` | implemented | the SDK aborts the request signal; the handler cancels the run |
+| `_session/steering` (extension) | implemented | injects into the running turn; `startedNewTurn` when idle; `promptRequired` opt-in; advertised via `initialize._meta.steering` |
 | `nes/start`, `nes/suggest`, `nes/close` | not advertised | next-edit suggestions are not a chat agent feature |
 
 ## Client methods the agent calls
@@ -38,7 +39,7 @@ advertised** — the capability flag is never set, so a client does not call it;
 | `session/request_permission` | implemented | approve once / approve for session / reject |
 | `elicitation/create` | implemented | form mode when advertised; a choice-style permission request otherwise |
 | `fs/read_text_file`, `fs/write_text_file` | not used | the engine reads and writes in-process (ADR Decision 3) |
-| `terminal/create`, `terminal/output`, `terminal/wait_for_exit`, `terminal/kill`, `terminal/release` | not used | command execution belongs to the engine; the client gets a display terminal through `_meta` (`terminal_info`, `terminal_output`, `terminal_exit`) |
+| `terminal/create`, `terminal/output`, `terminal/wait_for_exit`, `terminal/kill`, `terminal/release` | not used | command execution belongs to the engine; the client gets a display terminal through `_meta` (`terminal_info`, `terminal_output` or `terminal_output_delta`, `terminal_exit`) |
 | `mcp/connect`, `mcp/message`, `mcp/disconnect` | **blocked** | MCP-over-ACP would need the engine's MCP client to accept an ACP-provided transport; its transports are stdio/SSE/HTTP only (`agent-core-v2/src/mcpCore/`). The engine's own MCP config still applies to every session |
 
 ## Session updates
@@ -51,7 +52,7 @@ advertised** — the capability flag is never set, so a client does not call it;
 | `tool_call` | implemented | title, kind, status, `rawInput`, diff content, readable-file locations, `_meta.terminal_info` |
 | `tool_call_update` | implemented | streamed arguments, status, result preview, `rawOutput`, `_meta.terminal_output` / `terminal_exit` |
 | `plan` | implemented | from the engine's `TodoList` display; replayed from history |
-| `available_commands_update` | implemented | session skills, invokable as `/name` |
+| `available_commands_update` | implemented | built-in commands (goal, swarm, compact, status, …), plugin commands and session skills, all invokable as `/name` |
 | `current_mode_update` | implemented | `session/set_mode` |
 | `config_option_update` | implemented | model / thinking / mode changes |
 | `session_info_update` | implemented | engine-generated titles (`session.meta.updated`) |

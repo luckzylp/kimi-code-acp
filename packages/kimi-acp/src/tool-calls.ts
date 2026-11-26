@@ -216,6 +216,8 @@ export interface ToolCallsOptions {
   readonly cwd: () => string;
   /** `_meta.terminal_output` is rendered by the client. */
   readonly shadowTerminals: boolean;
+  /** The client appends `_meta.terminal_output_delta` chunks itself. */
+  readonly terminalOutputDelta?: boolean;
   readonly emit: (notification: SessionNotification) => void;
   readonly now?: () => number;
 }
@@ -419,7 +421,10 @@ export class ToolCalls {
       update: {
         sessionUpdate: 'tool_call_update',
         toolCallId: call.acpId,
-        _meta: { terminal_output: { terminal_id: call.terminalId, data } },
+        _meta:
+          this.options.terminalOutputDelta === true
+            ? { terminal_output_delta: { terminal_id: call.terminalId, data } }
+            : { terminal_output: { terminal_id: call.terminalId, data } },
       },
     });
   }

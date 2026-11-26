@@ -42,6 +42,16 @@ verified end to end.** Present today:
 - **protocol-level cancel**: `$/cancel_request` cancels the request it names,
   as clients that drop a request expect; `additionalDirectories` is honoured
   on `session/new`, `load` and `resume`
+- **steering**: the `_session/steering` extension injects a follow-up into the
+  running turn (`injected`), starts a detached turn when idle, or reports
+  `promptRequired` to clients that own the fallback; a `session/prompt` that
+  arrives mid-run is steered instead of rejected
+- **slash commands with TUI parity**: goal (status/pause/resume/cancel/create),
+  swarm, tower, compact, status, usage, permission modes, model, effort, title,
+  undo, tasks, add-dir, mcp, plugins, init, logout, plus plugin commands and
+  skills — all answered locally where no model turn is needed
+- **`terminal_output_delta`**: clients that append chunks get deltas; others get
+  `terminal_output`
 - the **run** model: a prompt settles at quiescence (session idle, or a 2 s
   grace after the turn), not at `turn.ended`, so continuation turns stay
   inside the client's prompt

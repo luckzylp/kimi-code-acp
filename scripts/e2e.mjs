@@ -177,6 +177,14 @@ async function terminalScenario() {
   });
 }
 
+/** The last agent text in the transcript, for asserting a command's answer. */
+function lastAgentText(agent) {
+  return updates(agent)
+    .filter((update) => update.sessionUpdate === 'agent_message_chunk')
+    .map((update) => update.content?.text ?? '')
+    .join('\n');
+}
+
 /** Poll until `predicate` holds or the timeout expires. */
 async function waitFor(predicate, timeoutMs, what) {
   const deadline = Date.now() + timeoutMs;
@@ -316,6 +324,121 @@ async function cancelRequestScenario() {
         throw new Error(`$/cancel_request returned ${response.stopReason}`);
       }
       ok('$/cancel_request cancelled the prompt it named');
+    },
+  );
+}
+
+/** A client that appends chunks gets `terminal_output_delta` instead. */
+async function terminalDeltaScenario() {
+  const command = 'echo delta-hello';
+  const script = [
+    { kind: 'tool', id: 'call_bash', name: 'Bash', arguments: JSON.stringify({ command }) },
+    { kind: 'text', text: 'finished' },
+  ];
+  await withAgent({ script }, async ({ agent, workDir }) => {
+    const sessionId = await newSession(agent, workDir, { _meta: { terminal_output_delta: true } });
+    await agent.request(
+      'session/prompt',
+      { sessionId, prompt: [{ type: 'text', text: 'run the command' }] },
+      180_000,
+    );
+    const toolUpdates = updates(agent).filter(
+      (update) => update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update',
+    );
+    const deltas = toolUpdates
+      .map((update) => update._meta?.terminal_output_delta)
+      .filter((chunk) => chunk !== undefined);
+    if (deltas.length === 0) throw new Error('no _meta.terminal_output_delta was sent');
+    const output = deltas.map((chunk) => chunk.data).join('');
+    if (!output.includes('delta-hello')) throw new Error('delta chunks lacked the command output');
+    if (toolUpdates.some((update) => update._meta?.terminal_output !== undefined)) {
+      throw new Error('terminal_output was sent to a delta-capable client');
+    }
+    ok('terminal_output_delta carried the command output');
+  });
+}
+
+/** Built-in slash commands answer locally, without a model request. */
+async function commandScenario() {
+  await withAgent({ script: [] }, async ({ agent, provider, workDir }) => {
+    const sessionId = await newSession(agent, workDir);
+    await waitFor(
+      () => updates(agent).some((update) => update.sessionUpdate === 'available_commands_update'),
+      5_000,
+      'available_commands_update',
+    );
+    const advertisement = updates(agent).find(
+      (update) => update.sessionUpdate === 'available_commands_update',
+    );
+    const names = (advertisement.availableCommands ?? []).map((command) => command.name);
+    for (const expected of ['goal', 'swarm', 'compact', 'status', 'permission', 'model', 'effort']) {
+      if (!names.includes(expected)) throw new Error(`command "${expected}" is not advertised`);
+    }
+    ok(`${String(names.length)} commands advertised (built-ins + skills/plugins)`);
+
+    const status = await agent.request(
+      'session/prompt',
+      { sessionId, prompt: [{ type: 'text', text: '/status' }] },
+      30_000,
+    );
+    if (status.stopReason !== 'end_turn') throw new Error('/status did not settle as end_turn');
+    const statusText = lastAgentText(agent);
+    if (!statusText.includes('Model:') || !statusText.includes('Permission:')) {
+      throw new Error(`/status answered nothing useful: ${statusText}`);
+    }
+    ok('/status answered with the session status');
+
+    await agent.request(
+      'session/prompt',
+      { sessionId, prompt: [{ type: 'text', text: '/swarm off' }] },
+      30_000,
+    );
+    if (!lastAgentText(agent).includes('Swarm mode off')) throw new Error('/swarm off did not answer');
+    if (provider.requests.length !== 0) throw new Error('a local command reached the model');
+    ok('/swarm off answered locally, with no model request');
+  });
+}
+
+/** Steering: injected into the running turn, and `promptRequired` when idle. */
+async function steeringScenario() {
+  await withAgent(
+    {
+      script: [{ kind: 'text', text: 'slow answer' }, { kind: 'text', text: 'second answer' }],
+      delayMs: 3_000,
+    },
+    async ({ agent, workDir }) => {
+      const sessionId = await newSession(agent, workDir);
+      const first = agent.request(
+        'session/prompt',
+        { sessionId, prompt: [{ type: 'text', text: 'start the slow turn' }] },
+        60_000,
+      );
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 500));
+      const steered = await agent.request(
+        '_session/steering',
+        { sessionId, prompt: [{ type: 'text', text: 'also check the tests' }] },
+        30_000,
+      );
+      if (steered.outcome !== 'injected') {
+        throw new Error(`steering returned ${String(steered.outcome)}, expected injected`);
+      }
+      ok('_session/steering injected into the running turn');
+      const response = await first;
+      if (response.stopReason !== 'end_turn') throw new Error('the steered run did not finish');
+
+      const idle = await agent.request(
+        '_session/steering',
+        {
+          sessionId,
+          prompt: [{ type: 'text', text: 'later' }],
+          _meta: { steering: { idleBehavior: 'promptRequired' } },
+        },
+        30_000,
+      );
+      if (idle.outcome !== 'promptRequired') {
+        throw new Error(`idle steering returned ${String(idle.outcome)}, expected promptRequired`);
+      }
+      ok('idle steering honoured promptRequired');
     },
   );
 }
@@ -573,9 +696,12 @@ async function loadScenario() {
 await turnScenario();
 await cancelScenario();
 await terminalScenario();
+await terminalDeltaScenario();
 await surfaceScenario();
 await promptContentScenario();
 await planScenario();
+await commandScenario();
+await steeringScenario();
 await cancelRequestScenario();
 await cancelDuringPermissionScenario();
 await lifecycleScenario();
