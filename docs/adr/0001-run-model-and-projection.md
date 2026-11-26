@@ -196,10 +196,10 @@ Risks:
 
 ## Known limitations
 
-- **MCP-over-ACP transport**: client-declared servers (`session/new.mcpServers`)
-  are supported as engine servers. A client that hosts an MCP connection itself
-  (`mcp/connect`) cannot be served yet: the engine's MCP client speaks only
-  stdio/SSE/HTTP.
+- **MCP-over-ACP**: both forms are served. Declared servers (`mcpServers`)
+  register as session-local engine servers; a client-hosted connection
+  (`mcp/connect`) is tunnelled through a stdio proxy the engine spawns
+  (`kimi-acp mcp-bridge`), with `mcp/message` carrying MCP JSON-RPC both ways.
 
 ## Alternatives rejected
 

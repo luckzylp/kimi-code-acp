@@ -511,6 +511,92 @@ async function mcpScenario() {
   });
 }
 
+/**
+ * MCP-over-ACP (v2): the client hosts the MCP server, the agent tunnels to it
+ * through mcp/connect + mcp/message, and the engine reaches it through the
+ * bridge proxy. The tool must behave exactly like a declared server.
+ */
+async function mcpAcpScenario() {
+  const script = [
+    {
+      kind: 'tool',
+      id: 'call_acp_mcp',
+      name: 'mcp__acp-echo__echo',
+      arguments: JSON.stringify({ text: 'acp-hello' }),
+    },
+    { kind: 'text', text: 'acp mcp done' },
+  ];
+  await withAgent({ script }, async ({ agent, workDir }) => {
+    const calls = [];
+    await agent.request('initialize', {
+      protocolVersion: 2,
+      info: { name: 'v2-mcp-client', version: '0.0.0' },
+    });
+    agent.onRequest('session/request_permission', () => ({
+      outcome: { outcome: 'selected', optionId: 'approve_once' },
+    }));
+    agent.onRequest('mcp/connect', (params) => {
+      calls.push(['connect', 'connect', params.serverId]);
+      return { connectionId: `conn-${params.serverId}` };
+    });
+    agent.onRequest('mcp/message', (params) => {
+      calls.push(['message', params.method]);
+      switch (params.method) {
+        case 'initialize':
+          return {
+            protocolVersion: '2025-06-18',
+            capabilities: { tools: {} },
+            serverInfo: { name: 'acp-echo', version: '1.0.0' },
+          };
+        case 'tools/list':
+          return {
+            tools: [
+              {
+                name: 'echo',
+                description: 'Echo the given text back',
+                inputSchema: {
+                  type: 'object',
+                  properties: { text: { type: 'string' } },
+                  required: ['text'],
+                },
+              },
+            ],
+          };
+        case 'tools/call':
+          return {
+            content: [{ type: 'text', text: String(params.params?.arguments?.text ?? '') }],
+            isError: false,
+          };
+        default:
+          return {};
+      }
+    });
+
+    const created = await agent.request('session/new', {
+      cwd: workDir,
+      mcpServers: [{ type: 'acp', name: 'acp-echo', serverId: 'srv-acp' }],
+    });
+    ok('v2 session/new connected the client-hosted MCP server');
+
+    await agent.request(
+      'session/prompt',
+      { sessionId: created.sessionId, prompt: [{ type: 'text', text: 'use the acp echo tool' }] },
+      180_000,
+    );
+    const methods = calls.filter(([, method]) => method !== undefined).map(([, method]) => method);
+    if (!methods.includes('connect')) throw new Error('mcp/connect was never called');
+    if (!methods.includes('initialize') || !methods.includes('tools/list') || !methods.includes('tools/call')) {
+      throw new Error(`MCP-over-ACP methods seen: ${methods.join(',')}`);
+    }
+    const resultText = updates(agent)
+      .filter((update) => update.sessionUpdate === 'tool_call_update')
+      .map((update) => JSON.stringify(update.content ?? ''))
+      .join('\n');
+    if (!resultText.includes('acp-hello')) throw new Error('the MCP-over-ACP tool result did not come back');
+    ok('the model called the client-hosted MCP tool and its result came back');
+  });
+}
+
 /** Built-in slash commands answer locally, without a model request. */
 async function commandScenario() {
   await withAgent({ script: [] }, async ({ agent, provider, workDir }) => {
@@ -856,6 +942,7 @@ await promptContentScenario();
 await planScenario();
 await commandScenario();
 await mcpScenario();
+await mcpAcpScenario();
 await steeringScenario();
 await cancelRequestScenario();
 await cancelDuringPermissionScenario();

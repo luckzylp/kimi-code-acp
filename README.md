@@ -46,6 +46,10 @@ verified end to end.** Present today:
   registered as session-local engine servers and become callable tools; because
   the engine snapshots the tool list at session start, they are seeded through a
   bootstrap session that stays alive with the ACP session
+- **MCP-over-ACP**: a v2 client that hosts an MCP server itself
+  (`mcp/connect`) is reached through `kimi-acp mcp-bridge`, a stdio proxy the
+  engine spawns; MCP JSON-RPC is tunnelled over `mcp/message` in both
+  directions and the tunnel disconnects with its session
 - **ACP v1 and v2**: one connection routes on the client's `initialize` —
   v1 gets today's surface, v2 (experimental draft) gets `auth/login`,
   `providers/list`, the v2 update vocabulary (`tool_call_update`,

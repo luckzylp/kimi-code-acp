@@ -16,7 +16,21 @@ import { AGENT_NAME, VERSION } from './version';
 
 const argv = process.argv.slice(2);
 
-if (argv[0] === 'login' || argv.includes('--login')) {
+if (argv[0] === 'mcp-bridge') {
+  // Spawned by the engine as a stdio MCP server for an ACP-hosted connection:
+  // raw stdio ↔ socket, no logging on stdout.
+  const socketPath = argv[1];
+  if (socketPath === undefined) process.exit(2);
+  const { connect } = await import('node:net');
+  const socket = connect(socketPath);
+  socket.on('error', () => process.exit(1));
+  socket.on('close', () => process.exit(0));
+  process.stdin.pipe(socket);
+  socket.pipe(process.stdout);
+  process.stdin.on('end', () => socket.end());
+  // Never fall through to the ACP server: this process only proxies bytes.
+  await new Promise<never>(() => undefined);
+} else if (argv[0] === 'login' || argv.includes('--login')) {
   // The ACP terminal auth method runs exactly this: the device-code flow in a
   // terminal the client opened for it.
   const code = await runLogin();

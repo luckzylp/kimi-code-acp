@@ -79,6 +79,7 @@ import {
   modelEntries,
 } from './config-options';
 import { log } from './log';
+import { McpBridge } from './mcp-bridge';
 import { buildPrompt } from './prompt';
 import { projectReplay, type ReplayRecord } from './replay';
 import { toV2Updates } from './v2-updates';
@@ -120,6 +121,10 @@ export interface AgentState {
   v2Client: V2ClientLike | undefined;
   /** Bootstrap sessions holding client-declared MCP servers alive, by ACP session. */
   readonly mcpBootstrap: Map<string, KimiSession>;
+  /** MCP-over-ACP bridges by their connection id (client-initiated messages). */
+  readonly mcpBridges: Map<string, McpBridge>;
+  /** MCP-over-ACP bridges owned by an ACP session. */
+  readonly mcpSessionBridges: Map<string, McpBridge[]>;
 }
 
 export function createAgentState(): AgentState {
@@ -130,6 +135,8 @@ export function createAgentState(): AgentState {
     client: undefined,
     v2Client: undefined,
     mcpBootstrap: new Map(),
+    mcpBridges: new Map(),
+    mcpSessionBridges: new Map(),
   };
 }
 
@@ -464,6 +471,7 @@ export async function deleteSession(
     state.sessions.delete(params.sessionId);
   }
   await closeMcpBootstrap(state, params.sessionId);
+  await closeMcpBridges(state, params.sessionId);
   const harness = await harnessOf(state);
   await harness.deleteSession(params.sessionId);
   log.info('acp: session deleted', { sessionId: params.sessionId });
@@ -477,6 +485,7 @@ export async function closeSession(state: AgentState, params: CloseSessionReques
     state.sessions.delete(params.sessionId);
   }
   await closeMcpBootstrap(state, params.sessionId);
+  await closeMcpBridges(state, params.sessionId);
   return {};
 }
 
@@ -817,6 +826,29 @@ export function cancel(state: AgentState, params: CancelNotification): void {
   state.sessions.get(params.sessionId)?.bridge.cancel();
 }
 
+/** Close the MCP-over-ACP bridges owned by a session. */
+export async function closeMcpBridges(state: AgentState, sessionId: string): Promise<void> {
+  const bridges = state.mcpSessionBridges.get(sessionId) ?? [];
+  state.mcpSessionBridges.delete(sessionId);
+  for (const bridge of bridges) {
+    state.mcpBridges.delete(bridge.connectionId);
+    // Tell the client the tunnel is gone before dropping the socket.
+    await state.v2Client
+      ?.request('mcp/disconnect', { connectionId: bridge.connectionId })
+      .catch(() => undefined);
+    await bridge.dispose();
+  }
+}
+
+/** Route a client-initiated MCP message to the bridge that owns the connection. */
+export function deliverMcpMessage(
+  state: AgentState,
+  connectionId: string,
+  message: Record<string, unknown>,
+): void {
+  state.mcpBridges.get(connectionId)?.deliver(message);
+}
+
 /** Close the bootstrap session that keeps client MCP servers alive. */
 async function closeMcpBootstrap(state: AgentState, sessionId: string): Promise<void> {
   const bootstrap = state.mcpBootstrap.get(sessionId);
@@ -830,6 +862,9 @@ export async function close(state: AgentState): Promise<void> {
   state.sessions.clear();
   await Promise.all([...state.mcpBootstrap.values()].map((bootstrap) => bootstrap.close().catch(() => undefined)));
   state.mcpBootstrap.clear();
+  await Promise.all([...state.mcpSessionBridges.values()].flat().map((bridge) => bridge.dispose()));
+  state.mcpSessionBridges.clear();
+  state.mcpBridges.clear();
   await state.harness?.close();
   state.harness = undefined;
 }

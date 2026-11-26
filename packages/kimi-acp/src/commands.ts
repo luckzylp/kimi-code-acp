@@ -251,7 +251,11 @@ const MCP: SlashCommandSpec = {
     if (servers.length === 0) return { text: 'No MCP servers configured.' };
     return {
       text: servers
-        .map((server) => `${server.name} [${server.status}] ${server.transport} · ${String(server.toolCount)} tool(s)`)
+        .map(
+          (server) =>
+            `${server.name} [${server.status}] ${server.transport} · ${String(server.toolCount)} tool(s)` +
+            (server.error === undefined ? '' : `\nerror: ${server.error}`),
+        )
         .join('\n'),
     };
   },
