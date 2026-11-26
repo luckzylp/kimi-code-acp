@@ -93,14 +93,34 @@ export function toV2Updates(notification: SessionNotification): V2Update[] {
           },
         },
       ];
+    case 'config_option_update': {
+      const options = Array.isArray(update['configOptions']) ? update['configOptions'] : [];
+      return [
+        {
+          sessionUpdate: 'config_option_update',
+          configOptions: toV2ConfigOptions(options as Record<string, unknown>[]),
+        },
+      ];
+    }
     case 'available_commands_update':
-    case 'config_option_update':
     case 'session_info_update':
     case 'usage_update':
       return [{ sessionUpdate: update['sessionUpdate'], ...rest(update) }];
     default:
       return [];
   }
+}
+
+/** v1 config options → v2 (`configId` instead of `id`). */
+export function toV2ConfigOptions(options: readonly Record<string, unknown>[]): Record<string, unknown>[] {
+  return options.map((option) => ({
+    type: 'select',
+    configId: option['id'],
+    name: option['name'],
+    ...(option['category'] === undefined ? {} : { category: option['category'] }),
+    currentValue: option['currentValue'],
+    options: option['options'],
+  }));
 }
 
 /** Foreground state updates: v2 clients learn a turn ended from these. */

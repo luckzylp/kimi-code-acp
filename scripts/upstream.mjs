@@ -15,7 +15,7 @@
  *
  * Idempotent: a prepared tree is only re-checked unless `--force` is given.
  *
- *   node scripts/upstream.mjs [--tag @moonshot-ai/kimi-code@2.7.3] [--force]
+ *   node scripts/upstream.mjs [--tag @moonshot-ai/kimi-code@2.8.1] [--force]
  */
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';

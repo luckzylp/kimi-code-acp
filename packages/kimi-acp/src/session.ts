@@ -4,8 +4,8 @@
  * The unit of work is a **run**: one `session/prompt`. A run does not end when a
  * turn ends — the engine keeps launching turns for the same request (a goal
  * continuation, a finished background task), and those belong to the run. It
- * ends at quiescence: `loop.idle`, a session status of `idle`, or a short grace
- * window with no further turn. That is what makes goal and swarm workable, and
+ * ends when the engine ends the turn (2.8 runs a prompt as one turn, with model
+ * steps and tool calls as steps inside it), or when the session reports idle. That is what makes goal and swarm workable, and
  * what keeps the client's composing state truthful for the whole run.
  *
  * Every update goes through one ordered outbox; a run's response is only
@@ -39,16 +39,27 @@ import { log } from './log';
 import { Outbox } from './outbox';
 import { ToolCalls } from './tool-calls';
 
-/** How long a run waits for a continuation turn before it settles. */
-const QUIESCE_GRACE_MS = 2_000;
+/** The ACP stop reason for an engine turn end (mirrors the upstream mapping). */
+function turnStopReason(
+  reason: 'completed' | 'cancelled' | 'failed' | 'blocked',
+  error: { readonly code?: string } | undefined,
+): StopReason {
+  switch (reason) {
+    case 'completed':
+      return 'end_turn';
+    case 'cancelled':
+      return 'cancelled';
+    case 'failed':
+      return error?.code === 'provider.filtered' ? 'refusal' : 'end_turn';
+    case 'blocked':
+      return 'refusal';
+  }
+}
 
 interface Run {
   readonly resolve: (reason: StopReason) => void;
   readonly reject: (error: unknown) => void;
   settled: boolean;
-  /** At least one turn of this run has ended, so quiescence can be honoured. */
-  sawTurnEnd: boolean;
-  grace: ReturnType<typeof setTimeout> | undefined;
 }
 
 export interface SessionBridgeOptions {
@@ -144,7 +155,7 @@ export class SessionBridge {
       return Promise.reject(new Error('a run is already in progress in this session'));
     }
     return new Promise<StopReason>((resolve, reject) => {
-      const run: Run = { resolve, reject, settled: false, sawTurnEnd: false, grace: undefined };
+      const run: Run = { resolve, reject, settled: false };
       this.run = run;
       const submission =
         skill === undefined
@@ -213,10 +224,9 @@ export class SessionBridge {
   }
 
   private handleEvent(event: Event): void {
+    if (process.env['KIMI_ACP_EVENTS'] === '1') log.info('acp: engine event', { type: event.type });
     switch (event.type) {
       case 'turn.started': {
-        // A continuation turn proves the run is not finished after all.
-        this.clearGrace();
         this.messageId = undefined;
         if (this.run === undefined || this.run.settled) {
           // Nobody prompted this turn: say what set the agent off (Decision 2.4).
@@ -269,21 +279,27 @@ export class SessionBridge {
           log.info('acp: turn without a run', { sessionId: this.sessionId, turnId: event.turnId, reason: event.reason });
           return;
         }
-        if (event.reason === 'cancelled') {
-          this.settle(run, 'cancelled');
-          return;
-        }
-        if (event.reason === 'failed') {
-          this.settle(run, 'end_turn');
-          return;
-        }
-        run.sawTurnEnd = true;
-        this.armGrace(run);
+        // Engine 2.8 runs a prompt as one turn (model steps and tool calls are
+        // steps inside it), so the turn's end is the run's end — the same
+        // settlement the upstream ACP server uses.
+        this.settle(run, turnStopReason(event.reason, event.error));
         return;
       }
-      case 'loop.idle': {
+      case 'prompt.submitted':
+      case 'prompt.steered': {
+        // Steering or queueing folds work into the run; the turn's end settles it.
+        return;
+      }
+      case 'prompt.completed': {
+        // Some engine paths report the prompt itself instead of a turn end.
         const run = this.run;
-        if (run !== undefined && !run.settled && run.sawTurnEnd) this.settle(run, 'end_turn');
+        if (run === undefined || run.settled) return;
+        this.settle(run, turnStopReason(event.reason ?? 'completed', undefined));
+        return;
+      }
+      case 'prompt.aborted': {
+        const run = this.run;
+        if (run !== undefined && !run.settled) this.settle(run, 'cancelled');
         return;
       }
       case 'goal.updated': {
@@ -389,7 +405,7 @@ export class SessionBridge {
       }
       case 'event.session.status_changed': {
         const run = this.run;
-        if (event.status === 'idle' && run !== undefined && !run.settled && run.sawTurnEnd) {
+        if (event.status === 'idle' && run !== undefined && !run.settled) {
           this.settle(run, 'end_turn');
         }
         return;
@@ -399,22 +415,6 @@ export class SessionBridge {
     }
   }
 
-  private armGrace(run: Run): void {
-    if (run.grace !== undefined) return;
-    run.grace = setTimeout(() => {
-      run.grace = undefined;
-      this.settle(run, 'end_turn');
-    }, QUIESCE_GRACE_MS);
-    run.grace.unref?.();
-  }
-
-  private clearGrace(): void {
-    const run = this.run;
-    if (run?.grace === undefined) return;
-    clearTimeout(run.grace);
-    run.grace = undefined;
-  }
-
   /**
    * Retire the run exactly once. The response waits for the outbox so the
    * client renders the turns' output before the prompt looks answered.
@@ -422,10 +422,6 @@ export class SessionBridge {
   private settle(run: Run, reason: StopReason): void {
     if (run.settled) return;
     run.settled = true;
-    if (run.grace !== undefined) {
-      clearTimeout(run.grace);
-      run.grace = undefined;
-    }
     if (this.run === run) this.run = undefined;
     this.assistant.flushNow();
     this.thought.flushNow();
@@ -437,10 +433,6 @@ export class SessionBridge {
   private fail(run: Run, error: unknown): void {
     if (run.settled) return;
     run.settled = true;
-    if (run.grace !== undefined) {
-      clearTimeout(run.grace);
-      run.grace = undefined;
-    }
     if (this.run === run) this.run = undefined;
     this.assistant.flushNow();
     this.thought.flushNow();

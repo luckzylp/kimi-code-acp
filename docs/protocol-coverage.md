@@ -2,7 +2,7 @@
 
 Audit of the adapter against the ACP v1 schema shipped with
 `@agentclientprotocol/sdk@1.3.0` (`schema/schema.json`), as of
-`@moonshot-ai/kimi-code-acp@0.6.0`.
+`@moonshot-ai/kimi-code-acp@0.11.0` on `@moonshot-ai/kimi-code@2.8.1`.
 
 Legend: **implemented** — advertised and handled; **not used** — the client
 capability exists, but this agent intentionally does not use it; **not
@@ -79,8 +79,9 @@ opens the v1 or the v2 app. v2 requests delegate to the same session machinery;
 
 ## Beyond the wire
 
-- **Run model** (ADR Decision 2): a prompt settles at quiescence, so goal
-  continuations and late task notifications stay inside the client's prompt.
+- **Run model** (ADR Decision 2): a prompt settles when its engine turn ends
+  (2.8 runs a prompt as one turn); engine-started continuations are separate
+  turns and are introduced by a one-line note.
 - **Projections for activity ACP has no entity for** (`src/activity.ts`):
   goals (`goal:<id>`), subagents (`subagent:<id>`), compaction notices.
 - **Replay rules** (`src/replay.ts`): injected reminders stripped, TodoList

@@ -65,52 +65,43 @@ upstream tree is a build input, and the tag is the only pin. The copy is
 disposable because pnpm does not treat a symlinked directory as a workspace
 package; a build therefore refreshes it instead of linking it.
 
-## Decision 2 — A client prompt is a *run*, not a turn
+## Decision 2 — A client prompt is a *run*, and the run ends with its turn
 
-A **run** is one `session/prompt` request. It ends when the engine has no work
-left for it, not when a turn ends. Quiescence is `loop.idle` (no pending
-requests, no foreground work); a run only settles after it, or after a short
-grace window with no further turn, so a goal continuation or a task
-notification that arrives immediately after a turn folds into the same run.
+A **run** is one `session/prompt` request. Engine 2.8 runs a prompt as one
+turn: the model's steps and tool calls are *steps inside the turn*
+(`turn.step.started` / `turn.step.completed`), not turns of their own. So the
+turn's end is the run's end — the same settlement the upstream ACP server
+(`packages/acp-server`) uses. `loop.idle` and the quiescence grace this ADR
+originally relied on no longer exist in 2.8; an explicit `prompt.completed`
+only exists on other engine paths, so it is honoured when it arrives.
 
 ```
                      session/prompt
-        ┌──────────┐  ──────────────►  ┌────────────┐  engine accepts
-        │   Idle   │                   │ Launching  │ ───────────────┐
-        └──────────┘                   └────────────┘                │
-             ▲                                                       ▼
-             │                                          ┌────────────────────┐
-             │                                          │  Running(turn N)   │
-             │                                          └────────────────────┘
-             │                                             │            ▲
-             │                          turn.ended(*)      │            │ turn.started(origin ∈ run)
-             │                          ───────────────►  ┌────────────┴───┐ │
-             │                                          │   Quiescing    │─┘
-             │   resolve({stopReason})                  └────────────────┘
-             └───────────────  Settled  ◄───────────────┬─────────────────┘
-                                                          │ loop.idle, or grace expired
-                                                          │ turn.ended(failed|cancelled)
-                                                          ▼
-                                                   Settled immediately
+        ┌──────────┐  ──────────────►  ┌────────────┐
+        │   Idle   │                   │  Running   │  one turn: model steps,
+        └──────────┘                   └────────────┘  tool calls, compaction
+             ▲                                │
+             │ resolve({stopReason})          │ turn.ended(reason)
+             └────────────  Settled  ◄─────────┘
 ```
 
 Rules:
 
-1. `turn.ended(completed)` starts **Quiescing**, it does not resolve. A
-   `turn.started` inside the grace window returns to **Running** with the same
-   run (`goal_continuation`, `task`, `cron_job`, `system_trigger` origins).
-2. `turn.ended(failed)` → resolve `end_turn` (auth errors → JSON-RPC error);
-   `turn.ended(cancelled)` → resolve `cancelled`. Never wait for quiescence.
-3. Quiescence = `loop.idle` for the agent, or `QUIESCE_GRACE_MS` (2 s) with no
-   new turn — whichever comes first. A stuck loop cannot pin a prompt.
-4. A turn with **no live run** (a notification arriving minutes after the last
-   run settled) streams normally and is introduced by one
-   `user_message_chunk` note derived from its origin. This is the only case
-   that gets a note; continuation turns inside a run get none, or a goal that
-   runs 200 continuation turns would post 200 "the agent continued" lines.
-5. `session/cancel` cancels the run: for a goal run it pauses the goal first
+1. `turn.ended(completed)` → `end_turn`; `turn.ended(cancelled)` →
+   `cancelled`; `turn.ended(failed)` → `end_turn` (auth errors surface as
+   JSON-RPC errors; `provider.filtered` → `refusal`);
+   `turn.ended(blocked)` → `refusal`.
+2. A turn with **no live run** (a goal continuation or a task notification that
+   arrives after the prompt settled) streams normally and is introduced by one
+   `user_message_chunk` note derived from its origin. That note is what keeps
+   engine-started work visible; turns inside a run get none.
+3. `prompt.submitted` / `prompt.steered` never open a second run: steering
+   folds into the running turn, which settles at its end.
+4. `session/cancel` cancels the run: for a goal run it pauses the goal first
    (otherwise the engine relaunches a continuation on the next idle), then
    `session.cancel()`. One `session/prompt`, exactly one response.
+5. Engine `error` / `warning` events become notices, so a failed provider
+   request cannot leave a prompt silently unanswered.
 
 ## Decision 3 — Executions belong to the agent; the client renders a mirror
 
@@ -215,7 +206,8 @@ Risks:
 
 ## Verification
 
-M0 was validated on 2026-11-25 against `@moonshot-ai/kimi-code@2.7.3`:
+The chain was re-validated on 2026-11-26 against `@moonshot-ai/kimi-code@2.8.1`
+(originally 2026-11-25 against 2.7.3):
 
 | Step | Command | Result |
 | --- | --- | --- |
@@ -238,7 +230,7 @@ M0 was validated on 2026-11-25 against `@moonshot-ai/kimi-code@2.7.3`:
 | protocol cancel | `node scripts/e2e.mjs` | `$/cancel_request` cancels the prompt it names |
 | replay plan | `node scripts/e2e.mjs` | `session/load` restores the plan from the TodoList call in history |
 | install tree | `node scripts/pack.mjs` | 2.6 MB tarball, installed `node_modules` + lockfile, handshake from the installed copy |
-| npx-cache layout | `node scripts/pack.mjs` | `@moonshot-ai/kimi-code@2.7.3`'s dependency tree with our bundle over `dist/main.mjs`, handshake from that copy |
+| npx-cache layout | `node scripts/pack.mjs` | the published CLI's install tree with our bundle over `dist/main.mjs`, handshake from that copy (2.8.1 ships self-contained, so the tree holds one package) |
 
 Implementation notes worth keeping:
 

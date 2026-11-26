@@ -35,7 +35,7 @@ import { LOGIN_METHOD_ID } from './auth';
 import { log } from './log';
 import { McpBridge } from './mcp-bridge';
 import { parseSteerRequest, STEER_METHOD } from './steering';
-import { stateUpdate } from './v2-updates';
+import { stateUpdate, toV2ConfigOptions } from './v2-updates';
 import { AGENT_NAME, VERSION } from './version';
 
 const V2_PROTOCOL_VERSION = 2;
@@ -183,7 +183,13 @@ async function newSessionV2(
   }
   return {
     sessionId: response.sessionId as never,
-    ...(response.configOptions === undefined ? {} : { configOptions: response.configOptions as never }),
+    ...(response.configOptions === undefined
+      ? {}
+      : {
+          configOptions: toV2ConfigOptions(
+            response.configOptions as unknown as Record<string, unknown>[],
+          ) as never,
+        }),
   };
 }
 
@@ -234,7 +240,12 @@ async function setConfigOptionV2(
   state: AgentState,
   params: v2.SetSessionConfigOptionRequest,
 ): Promise<v2.SetSessionConfigOptionResponse> {
-  return (await setConfigOption(state, params as never)) as never;
+  const response = await setConfigOption(state, params as never);
+  return {
+    configOptions: toV2ConfigOptions(
+      response.configOptions as unknown as Record<string, unknown>[],
+    ) as never,
+  } as never;
 }
 
 async function promptV2(

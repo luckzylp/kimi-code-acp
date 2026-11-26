@@ -278,7 +278,7 @@ async function surfaceScenario() {
  */
 async function cancelDuringPermissionScenario() {
   await withAgent(
-    { script: [{ kind: 'tool', id: 'call_gate', name: 'Bash', arguments: JSON.stringify({ command: 'echo gated' }) }] },
+    { script: [{ kind: 'tool', id: 'call_gate', name: 'Bash', arguments: JSON.stringify({ command: 'rm -rf /tmp/kimi-acp-gated' }) }] },
     async ({ agent, workDir }) => {
       await agent.request('initialize', { protocolVersion: 1, clientCapabilities: {} });
       const pending = [];
@@ -337,7 +337,7 @@ async function cancelRequestScenario() {
 async function v2Scenario() {
   const script = [
     { kind: 'text', text: 'v2 hello' },
-    { kind: 'tool', id: 'call_v2', name: 'Bash', arguments: JSON.stringify({ command: 'echo v2-tool' }) },
+    { kind: 'tool', id: 'call_v2', name: 'Bash', arguments: JSON.stringify({ command: 'rm -rf /tmp/kimi-acp-v2-perm && echo v2-tool' }) },
     { kind: 'text', text: 'v2 done' },
   ];
   await withAgent({ script }, async ({ agent, workDir }) => {
@@ -385,6 +385,14 @@ async function v2Scenario() {
     ok('v2 turn streamed a message chunk and running → idle states');
 
     // A tool turn: v2 has one `tool_call_update` and native terminal updates.
+    // Pin manual approval so the permission path is exercised on any engine
+    // default (2.8 auto-approves safe commands under its own policy).
+    await agent.request('session/set_config_option', {
+      sessionId: created.sessionId,
+      configId: 'mode',
+      type: 'id',
+      value: 'default',
+    });
     await agent.request(
       'session/prompt',
       { sessionId: created.sessionId, prompt: [{ type: 'text', text: 'run the command' }] },

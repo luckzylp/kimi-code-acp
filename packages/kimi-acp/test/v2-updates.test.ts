@@ -87,11 +87,42 @@ describe('toV2Updates', () => {
     });
   });
 
-  it('keeps config, command, info and usage updates', () => {
-    for (const kind of ['available_commands_update', 'config_option_update', 'session_info_update', 'usage_update']) {
+  it('keeps command, info and usage updates', () => {
+    for (const kind of ['available_commands_update', 'session_info_update', 'usage_update']) {
       const [kept] = toV2Updates(note({ sessionUpdate: kind, value: 1 }) as never);
       expect(kept).toMatchObject({ sessionUpdate: kind, value: 1 });
     }
+  });
+
+  it('renames config option ids to configId for v2', () => {
+    const [kept] = toV2Updates(
+      note({
+        sessionUpdate: 'config_option_update',
+        configOptions: [
+          {
+            type: 'select',
+            id: 'model',
+            name: 'Model',
+            category: 'model',
+            currentValue: 'fake',
+            options: [{ value: 'fake', name: 'fake' }],
+          },
+        ],
+      }) as never,
+    );
+    expect(kept).toMatchObject({
+      sessionUpdate: 'config_option_update',
+      configOptions: [
+        {
+          type: 'select',
+          configId: 'model',
+          name: 'Model',
+          category: 'model',
+          currentValue: 'fake',
+          options: [{ value: 'fake', name: 'fake' }],
+        },
+      ],
+    });
   });
 
   it('drops update kinds v2 has no equivalent for', () => {

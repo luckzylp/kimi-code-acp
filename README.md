@@ -66,9 +66,9 @@ verified end to end.** Present today:
   skills — all answered locally where no model turn is needed
 - **`terminal_output_delta`**: clients that append chunks get deltas; others get
   `terminal_output`
-- the **run** model: a prompt settles at quiescence (session idle, or a 2 s
-  grace after the turn), not at `turn.ended`, so continuation turns stay
-  inside the client's prompt
+- the **run** model: engine 2.8 runs a prompt as one turn (model steps and
+  tool calls are steps inside it), so a prompt settles when its turn ends, with
+  `end_turn` / `cancelled` / `refusal` mapped from the turn's reason
 - coalesced `agent_message_chunk` / `agent_thought_chunk` streaming with one
   `messageId` per message, through a single ordered outbox
 - **tool cards**: title/kind/status, `rawInput`/`rawOutput`, diff content,
@@ -128,8 +128,7 @@ build/npx-cache/npx/kimi-acp/                  self-contained install
 build/npx-cache/kimi-code/                     the published CLI's own tree
   package.json                                 pins @moonshot-ai/kimi-code
   package-lock.json
-  node_modules/                                @moonshot-ai, @mariozechner,
-                                               qrcode, ws, chokidar, yargs, …
+  node_modules/@moonshot-ai/kimi-code/         2.8.1 ships self-contained
   node_modules/@moonshot-ai/kimi-code/dist/main.mjs   our bundle replaces the CLI's
 ```
 
@@ -137,8 +136,10 @@ Two shapes, one bundle. The first is a normal npm install of this adapter: the
 engine and the SDK are compiled into `dist/main.mjs`, so `node_modules` holds
 only `@moonshot-ai/kimi-code-acp` — nothing to resolve at run time. The second
 is the layout Zed keeps for `@moonshot-ai/kimi-code`'s npx cache: the published
-CLI and its dependency tree, with our bundle written over the CLI's
-`dist/main.mjs`, so that cache now serves ACP instead of the terminal UI.
+CLI with our bundle written over its `dist/main.mjs`, so that cache now serves
+ACP instead of the terminal UI. (2.8.1 publishes as a single self-contained
+package; older pins such as 2.7.3 pulled `qrcode`, `ws`, `chokidar` and their
+transitive tree, which is why the cache layout used to hold ~34 entries.)
 
 Point Zed at the installed bin (or at `packages/kimi-acp/dist/main.mjs`) as a
 custom agent command: `node <absolute path>`.
