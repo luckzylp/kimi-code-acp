@@ -251,6 +251,10 @@ async function surfaceScenario() {
     }
     ok(`session/set_config_option applied model ${String(model)}`);
 
+    const providers = await agent.request('providers/list', {});
+    if (!Array.isArray(providers.providers)) throw new Error('providers/list returned no providers array');
+    ok(`providers/list (v1) returned ${String(providers.providers.length)} provider(s)`);
+
     const usageBefore = updates(agent).filter((update) => update.sessionUpdate === 'usage_update').length;
     await agent.request('session/prompt', { sessionId: created.sessionId, prompt: [{ type: 'text', text: 'hi' }] }, 60_000);
     await waitFor(
@@ -900,7 +904,18 @@ async function loadScenario() {
     }
     ok(`session/list → ${listed.sessions.length} session(s), including ${sessionId}`);
 
-    await second.request('session/load', { sessionId, cwd: workDir, mcpServers: [] }, 120_000);
+    await second.request('session/load', {
+      sessionId,
+      cwd: workDir,
+      mcpServers: [
+        {
+          name: 'echo',
+          command: process.execPath,
+          args: [join(repoRoot, 'scripts', 'lib', 'mcp-echo-server.mjs')],
+          env: [],
+        },
+      ],
+    }, 120_000);
     const replayed = second.sessionUpdates();
     const text = replayed
       .filter((update) => update.sessionUpdate === 'user_message_chunk' || update.sessionUpdate === 'agent_message_chunk')
@@ -918,6 +933,28 @@ async function loadScenario() {
     );
     if (completed.length === 0) throw new Error('replay lost the tool result');
     ok(`session/load replayed ${replayed.length} update(s): prompt, reply, tool card and result`);
+
+    // The load's client MCP server must be connected and listed for the resumed session.
+    const deadline = Date.now() + 20_000;
+    let mcpList = '';
+    while (Date.now() < deadline) {
+      await second.request(
+        'session/prompt',
+        { sessionId, prompt: [{ type: 'text', text: '/mcp' }] },
+        30_000,
+      );
+      mcpList = second
+        .sessionUpdates()
+        .filter((update) => update.sessionUpdate === 'agent_message_chunk')
+        .map((update) => update.content?.text ?? '')
+        .join('\n');
+      if (/echo\s+\[connected\]/.test(mcpList)) break;
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 250));
+    }
+    if (!/echo\s+\[connected\]/.test(mcpList)) {
+      throw new Error(`session/load did not connect its MCP server: ${mcpList.slice(-300)}`);
+    }
+    ok('session/load connected the client-declared MCP server');
 
     const response = await second.request(
       'session/prompt',

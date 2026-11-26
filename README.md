@@ -42,7 +42,11 @@ verified end to end.** Present today:
 - **protocol-level cancel**: `$/cancel_request` cancels the request it names,
   as clients that drop a request expect; `additionalDirectories` is honoured
   on `session/new`, `load` and `resume`
-- **client MCP servers**: `session/new.mcpServers` (stdio / HTTP / SSE) are
+- **providers**: `providers/list` on both v1 and v2 reports the engine's
+  configured providers; `providers/set|disable` are rejected (the engine has no
+  safe live provider-write surface for an agent)
+- **client MCP servers**: `session/new`, `session/load`, `session/resume` and
+  `session/fork` `mcpServers` (stdio / HTTP / SSE) are
   registered as session-local engine servers and become callable tools; because
   the engine snapshots the tool list at session start, they are seeded through a
   bootstrap session that stays alive with the ACP session

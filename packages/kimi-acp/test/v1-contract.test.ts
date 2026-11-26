@@ -87,6 +87,23 @@ describe('v1 wire contract', () => {
     expectValid(zod['zInitializeResponse'], initializeResponse(), 'initialize');
   });
 
+  it('providers/list response matches the v1 schema', () => {
+    expectValid(
+      zod['zListProvidersResponse'],
+      {
+        providers: [
+          {
+            providerId: 'smitai',
+            supported: ['openai'],
+            required: false,
+            current: { apiType: 'openai', baseUrl: 'https://api.example.test/v1' },
+          },
+        ],
+      },
+      'providers/list',
+    );
+  });
+
   it('every projected session update matches the v1 schema', () => {
     for (const [label, update] of updates) {
       expectValid(zod['zSessionUpdate'], update, label);

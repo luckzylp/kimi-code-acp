@@ -43,6 +43,7 @@ import {
   type SetSessionConfigOptionRequest,
   type SetSessionConfigOptionResponse,
   type AvailableCommand,
+  type ListProvidersResponse,
   type McpServer as AcpMcpServer,
   type SessionConfigOption,
   type SessionModeState,
@@ -79,6 +80,7 @@ import {
   modelEntries,
 } from './config-options';
 import { log } from './log';
+import { listProviders } from './providers';
 import { McpBridge } from './mcp-bridge';
 import { buildPrompt } from './prompt';
 import { projectReplay, type ReplayRecord } from './replay';
@@ -157,6 +159,15 @@ export function createAgentApp(
     .onRequest('session/close', (context) => closeSession(state, context.params))
     .onRequest('session/fork', (context) => forkSession(state, context.params))
     .onRequest('authenticate', (context) => authenticate(state, context.params))
+    .onRequest('providers/list', async () => {
+      return (await listProviders(await harnessOf(state))) as unknown as ListProvidersResponse;
+    })
+    .onRequest('providers/set', () => {
+      throw RequestError.invalidParams(undefined, 'provider management is not supported by the kimi engine');
+    })
+    .onRequest('providers/disable', () => {
+      throw RequestError.invalidParams(undefined, 'provider management is not supported by the kimi engine');
+    })
     .onRequest('logout', (context) => logout(state, context.params))
     .onRequest('session/set_mode', (context) => setMode(state, context.params))
     .onRequest(STEER_METHOD, parseSteerRequest, (context) => steerRequest(state, context.params))
@@ -187,6 +198,8 @@ export function initializeResponse(): InitializeResponse {
       promptCapabilities: { image: true, embeddedContext: true },
       // stdio is always available; these are the remote transports we can run.
       mcpCapabilities: { http: true, sse: true },
+      // providers/list is served read-only; see providers.ts.
+      providers: {},
     },
     authMethods: [terminalAuthMethod()],
     // The ACP steering extension: a client may inject into the running turn.
@@ -412,6 +425,7 @@ async function availableCommands(session: KimiSession): Promise<AvailableCommand
  */
 async function loadSession(state: AgentState, params: LoadSessionRequest): Promise<LoadSessionResponse> {
   const harness = await harnessOf(state);
+  const bootstrap = await warmClientMcpServers(harness, params.cwd, params.mcpServers ?? []);
   const session = await harness.resumeSession({
     id: params.sessionId,
     replayTurnLimit: 200,
@@ -419,6 +433,7 @@ async function loadSession(state: AgentState, params: LoadSessionRequest): Promi
       ? {}
       : { additionalDirs: params.additionalDirectories }),
   });
+  if (bootstrap !== undefined) state.mcpBootstrap.set(session.id, bootstrap);
   const entry = await registerSession(state, session);
   const records = (session.getResumeState()?.agents?.['main']?.replay ?? []) as unknown as ReplayRecord[];
   for (const notification of projectReplay(params.sessionId, records)) {
@@ -437,12 +452,14 @@ export async function resumeSession(
   params: ResumeSessionRequest,
 ): Promise<ResumeSessionResponse> {
   const harness = await harnessOf(state);
+  const bootstrap = await warmClientMcpServers(harness, params.cwd, params.mcpServers ?? []);
   const session = await harness.resumeSession({
     id: params.sessionId,
     ...(params.additionalDirectories === undefined || params.additionalDirectories.length === 0
       ? {}
       : { additionalDirs: params.additionalDirectories }),
   });
+  if (bootstrap !== undefined) state.mcpBootstrap.set(session.id, bootstrap);
   const entry = await registerSession(state, session);
   const { configOptions, modes } = await surface(state, session);
   scheduleSurfaceUpdates(entry);
@@ -497,7 +514,9 @@ export async function closeSession(state: AgentState, params: CloseSessionReques
 /** `session/fork`: a new engine session seeded from this one's history. */
 export async function forkSession(state: AgentState, params: ForkSessionRequest): Promise<ForkSessionResponse> {
   const harness = await harnessOf(state);
+  const bootstrap = await warmClientMcpServers(harness, params.cwd, params.mcpServers ?? []);
   const forked = await harness.forkSession({ id: params.sessionId });
+  if (bootstrap !== undefined) state.mcpBootstrap.set(forked.id, bootstrap);
   const entry = await registerSession(state, forked);
   scheduleSurfaceUpdates(entry);
   log.info('acp: session forked', { from: params.sessionId, to: forked.id });

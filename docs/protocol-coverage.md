@@ -16,11 +16,11 @@ advertised** — the capability flag is never set, so a client does not call it;
 | `initialize` | implemented | `src/agent.ts` — protocol v1, `loadSession: true`, prompt capabilities (image, embedded context), terminal `login` auth method |
 | `authenticate` | implemented | `src/auth.ts` — device-code flow; unknown method ids are rejected |
 | `logout` | implemented | `src/agent.ts` |
-| `providers/list`, `providers/set`, `providers/disable` | not advertised | no `providers` capability; model choice is exposed as a config option instead |
+| `providers/list`, `providers/set`, `providers/disable` | list implemented, mutation rejected | v1 **and** v2 serve `providers/list` from the engine's config; set/disable answer `invalidParams` because the engine exposes no safe live provider write |
 | `session/new` | implemented | `src/agent.ts` — `additionalDirectories`; `mcpServers` become session-local engine servers whose tools reach the model |
-| `session/load` | implemented | resume + replay in `src/replay.ts` |
-| `session/resume` | implemented | bind without replay |
-| `session/fork` | implemented | `harness.forkSession` |
+| `session/load` | implemented | resume + replay in `src/replay.ts`; `mcpServers` are connected before the resumed session starts |
+| `session/resume` | implemented | bind without replay; `mcpServers` honoured
+| `session/fork` | implemented | `harness.forkSession`; `mcpServers` honoured
 | `session/list` | implemented | `harness.listSessions` |
 | `session/delete` | implemented | `harness.deleteSession` |
 | `session/close` | implemented | disposes the bridge |

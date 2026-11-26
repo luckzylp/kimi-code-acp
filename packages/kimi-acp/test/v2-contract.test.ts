@@ -103,6 +103,23 @@ describe('v2 wire contract', () => {
     expectValid(zod['zPromptResponse'], {}, 'prompt');
   });
 
+  it('providers/list response matches the v2 schema', () => {
+    expectValid(
+      zod['zListProvidersResponse'],
+      {
+        providers: [
+          {
+            providerId: 'smitai',
+            supported: ['openai'],
+            required: false,
+            current: { apiType: 'openai', baseUrl: 'https://api.example.test/v1' },
+          },
+        ],
+      },
+      'providers/list',
+    );
+  });
+
   it('every config option matches the v2 schema', () => {
     for (const option of toV2ConfigOptions([v1ConfigOption])) {
       expectValid(zod['zSessionConfigOption'], option, 'config option');

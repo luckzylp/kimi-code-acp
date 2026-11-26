@@ -33,6 +33,7 @@ import {
 } from './agent';
 import { LOGIN_METHOD_ID } from './auth';
 import { log } from './log';
+import { listProviders } from './providers';
 import { McpBridge } from './mcp-bridge';
 import { parseSteerRequest, STEER_METHOD } from './steering';
 import { stateUpdate, toV2ConfigOptions } from './v2-updates';
@@ -59,7 +60,7 @@ export function createV2App(state: AgentState): { app: v2.AgentApp } {
     .onRequest('session/close', (context) => closeSessionV2(state, context.params))
     .onRequest('session/set_config_option', (context) => setConfigOptionV2(state, context.params))
     .onRequest('session/prompt', (context) => promptV2(state, context.params, context.signal))
-    .onRequest('providers/list', () => listProviders(state))
+    .onRequest('providers/list', async () => (await listProviders(await harnessOf(state))) as never)
     .onRequest('providers/set', () => {
       throw v2.RequestError.invalidParams(undefined, 'provider management is not supported by the kimi engine');
     })
@@ -285,20 +286,3 @@ async function sendState(
   }
 }
 
-/** `providers/list`: the engine's configured providers, read-only. */
-async function listProviders(state: AgentState): Promise<v2.ListProvidersResponse> {
-  const harness = await harnessOf(state);
-  const config = (await harness.getConfig()) as unknown as {
-    providers?: Record<string, { baseUrl?: string; protocol?: string }>;
-  };
-  const providers = Object.entries(config.providers ?? {}).map(([providerId, provider]) => {
-    const apiType = provider.protocol ?? 'openai';
-    return {
-      providerId,
-      supported: [apiType],
-      required: false,
-      current: { apiType, baseUrl: provider.baseUrl ?? '' },
-    };
-  });
-  return { providers: providers as never };
-}
