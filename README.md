@@ -112,7 +112,10 @@ Signing in, once the bundle is installed:
 node packages/kimi-acp/dist/main.mjs login   # device-code flow in this terminal
 ```
 
-`npm run verify` runs typecheck, build, smoke and e2e in order.
+`npm run verify` runs typecheck, unit tests, build, smoke and e2e in order.
+The unit suite includes **wire-contract tests**: every v1 and v2 update the
+adapter can emit is parsed by the ACP SDK's own zod schemas, so a shape drift
+fails the build instead of a client.
 
 ## Installable artifact
 

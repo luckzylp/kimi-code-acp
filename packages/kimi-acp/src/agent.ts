@@ -175,6 +175,11 @@ function initialize(state: AgentState, params: InitializeRequest): InitializeRes
     protocolVersion: params.protocolVersion,
     clientCapabilities: state.capabilities,
   });
+  return initializeResponse();
+}
+
+/** The v1 handshake payload, exported so contract tests can validate it. */
+export function initializeResponse(): InitializeResponse {
   return {
     protocolVersion: PROTOCOL_VERSION,
     agentCapabilities: {

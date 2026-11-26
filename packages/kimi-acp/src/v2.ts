@@ -96,6 +96,11 @@ function initialize(params: v2.InitializeRequest): v2.InitializeResponse {
     protocolVersion: params.protocolVersion,
     client: params.info?.name,
   });
+  return initializeResponse();
+}
+
+/** The v2 handshake payload, exported so contract tests can validate it. */
+export function initializeResponse(): v2.InitializeResponse {
   return {
     protocolVersion: V2_PROTOCOL_VERSION,
     info: { name: AGENT_NAME, title: 'kimi-code', version: VERSION },
