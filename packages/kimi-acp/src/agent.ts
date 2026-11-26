@@ -80,6 +80,7 @@ import {
 import { log } from './log';
 import { buildPrompt } from './prompt';
 import { projectReplay, type ReplayRecord } from './replay';
+import { toV2Updates } from './v2-updates';
 import {
   parseSteerRequest,
   STEER_METHOD,
@@ -104,20 +105,33 @@ interface SessionEntry {
   titled: boolean;
 }
 
-interface AgentState {
+/** The v2 client connection, shared with `v2.ts` (notify/request only). */
+export interface V2ClientLike {
+  notify(method: string, params: unknown): Promise<void>;
+  request<Response = unknown>(method: string, params: unknown): Promise<Response>;
+}
+
+export interface AgentState {
   capabilities: ClientCapabilities;
   harness: KimiHarness | undefined;
   readonly sessions: Map<string, SessionEntry>;
   client: AgentContext | undefined;
+  v2Client: V2ClientLike | undefined;
 }
 
-export function createAgentApp(): { app: AgentApp; close: () => Promise<void> } {
-  const state: AgentState = {
+export function createAgentState(): AgentState {
+  return {
     capabilities: readClientCapabilities(undefined),
     harness: undefined,
     sessions: new Map(),
     client: undefined,
+    v2Client: undefined,
   };
+}
+
+export function createAgentApp(
+  state: AgentState = createAgentState(),
+): { app: AgentApp; close: () => Promise<void> } {
 
   const app = agent({ name: AGENT_NAME })
     .onConnect((connection) => {
@@ -162,7 +176,7 @@ function initialize(state: AgentState, params: InitializeRequest): InitializeRes
   };
 }
 
-async function harnessOf(state: AgentState): Promise<KimiHarness> {
+export async function harnessOf(state: AgentState): Promise<KimiHarness> {
   state.harness ??= createKimiHarness({
     identity: { productName: AGENT_NAME, version: VERSION, platform: 'kimi_acp' },
   });
@@ -189,7 +203,7 @@ async function surface(
   };
 }
 
-async function newSession(state: AgentState, params: NewSessionRequest): Promise<NewSessionResponse> {
+export async function newSession(state: AgentState, params: NewSessionRequest): Promise<NewSessionResponse> {
   const harness = await harnessOf(state);
   const config = await harness.getConfig();
   const model = config.defaultModel;
@@ -199,10 +213,10 @@ async function newSession(state: AgentState, params: NewSessionRequest): Promise
       'No model configured. Run `kimi` once to log in, or set default_model in config.toml.',
     );
   }
-  if (params.mcpServers.length > 0) {
+  if ((params.mcpServers ?? []).length > 0) {
     // M2: the client's MCP servers arrive with the session; the engine's own
     // config still applies, so the session works without them.
-    log.warn('acp: client MCP servers are not wired yet', { count: params.mcpServers.length });
+    log.warn('acp: client MCP servers are not wired yet', { count: (params.mcpServers ?? []).length });
   }
   const session = await harness.createSession({
     workDir: params.cwd,
@@ -221,15 +235,29 @@ async function newSession(state: AgentState, params: NewSessionRequest): Promise
 /** Bind one engine session to the ACP session id and its handlers. */
 async function registerSession(state: AgentState, session: KimiSession): Promise<SessionEntry> {
   const client = state.client;
-  if (client === undefined) throw RequestError.internalError(undefined, 'ACP connection is not bound');
+  const v2 = state.v2Client;
+  if (client === undefined && v2 === undefined) {
+    throw RequestError.internalError(undefined, 'ACP connection is not bound');
+  }
   const existing = state.sessions.get(session.id);
   if (existing !== undefined) return existing;
   const bridge = new SessionBridge({
     sessionId: session.id,
     session,
-    shadowTerminals: state.capabilities.terminalOutput,
+    // v2 renders terminals natively, so a v2 session always mirrors command
+    // output even though the client never sent v1's terminal capability.
+    shadowTerminals: state.capabilities.terminalOutput || v2 !== undefined,
     terminalOutputDelta: state.capabilities.terminalOutputDelta,
-    send: (notification) => client.notify(methods.client.session.update, notification),
+    send: async (notification) => {
+      if (client !== undefined) {
+        await client.notify(methods.client.session.update, notification);
+        return;
+      }
+      // ACP v2: translate the v1 update vocabulary into v2 updates.
+      for (const update of toV2Updates(notification)) {
+        await v2?.notify('session/update', { sessionId: notification.sessionId, update });
+      }
+    },
   });
   wireApprovals(state, bridge, session);
   wireQuestions(state, bridge, session);
@@ -293,7 +321,7 @@ async function loadSession(state: AgentState, params: LoadSessionRequest): Promi
 }
 
 /** `session/resume`: bind the engine session without replaying history. */
-async function resumeSession(
+export async function resumeSession(
   state: AgentState,
   params: ResumeSessionRequest,
 ): Promise<ResumeSessionResponse> {
@@ -312,7 +340,7 @@ async function resumeSession(
 }
 
 /** `session/list`: the engine's session summaries for the client's picker. */
-async function listSessions(state: AgentState, params: ListSessionsRequest): Promise<ListSessionsResponse> {
+export async function listSessions(state: AgentState, params: ListSessionsRequest): Promise<ListSessionsResponse> {
   const harness = await harnessOf(state);
   const sessions = await harness.listSessions({
     ...(params.cwd === undefined || params.cwd === null ? {} : { workDir: params.cwd }),
@@ -327,7 +355,7 @@ async function listSessions(state: AgentState, params: ListSessionsRequest): Pro
   };
 }
 
-async function deleteSession(
+export async function deleteSession(
   state: AgentState,
   params: DeleteSessionRequest,
 ): Promise<DeleteSessionResponse> {
@@ -342,7 +370,7 @@ async function deleteSession(
   return {};
 }
 
-async function closeSession(state: AgentState, params: CloseSessionRequest): Promise<CloseSessionResponse> {
+export async function closeSession(state: AgentState, params: CloseSessionRequest): Promise<CloseSessionResponse> {
   const entry = state.sessions.get(params.sessionId);
   if (entry !== undefined) {
     await entry.bridge.dispose();
@@ -352,7 +380,7 @@ async function closeSession(state: AgentState, params: CloseSessionRequest): Pro
 }
 
 /** `session/fork`: a new engine session seeded from this one's history. */
-async function forkSession(state: AgentState, params: ForkSessionRequest): Promise<ForkSessionResponse> {
+export async function forkSession(state: AgentState, params: ForkSessionRequest): Promise<ForkSessionResponse> {
   const harness = await harnessOf(state);
   const forked = await harness.forkSession({ id: params.sessionId });
   const entry = await registerSession(state, forked);
@@ -387,7 +415,7 @@ async function applyMode(session: KimiSession, modeId: 'default' | 'plan' | 'aut
 }
 
 /** `session/set_config_option`: model, thinking level, or mode. */
-async function setConfigOption(
+export async function setConfigOption(
   state: AgentState,
   params: SetSessionConfigOptionRequest,
 ): Promise<SetSessionConfigOptionResponse> {
@@ -423,7 +451,7 @@ async function setConfigOption(
  * session is idle, the compatibility default starts a detached turn; a client
  * that opts into `idleBehavior: 'promptRequired'` starts it itself.
  */
-async function steerRequest(state: AgentState, params: SteerRequest): Promise<SteerResponse> {
+export async function steerRequest(state: AgentState, params: SteerRequest): Promise<SteerResponse> {
   const entry = state.sessions.get(params.sessionId);
   if (entry === undefined) throw RequestError.invalidParams(undefined, 'unknown session');
   const built = await buildPrompt(entry.session, params.prompt);
@@ -450,7 +478,7 @@ async function steerRequest(state: AgentState, params: SteerRequest): Promise<St
  * client's terminal; a client that calls `authenticate` directly gets the same
  * flow, with the URL written to this agent's stderr.
  */
-async function authenticate(
+export async function authenticate(
   state: AgentState,
   params: AuthenticateRequest,
 ): Promise<AuthenticateResponse> {
@@ -469,7 +497,7 @@ async function authenticate(
   return {};
 }
 
-async function logout(state: AgentState, _params: LogoutRequest): Promise<LogoutResponse> {
+export async function logout(state: AgentState, _params: LogoutRequest): Promise<LogoutResponse> {
   const harness = await harnessOf(state);
   await harness.auth.logout();
   return {};
@@ -483,7 +511,8 @@ async function logout(state: AgentState, _params: LogoutRequest): Promise<Logout
 function wireApprovals(state: AgentState, bridge: SessionBridge, session: KimiSession): void {
   session.setApprovalHandler(async (request) => {
     const client = state.client;
-    if (client === undefined) return { decision: 'cancelled' };
+    const v2 = state.v2Client;
+    if (client === undefined && v2 === undefined) return { decision: 'cancelled' };
     const toolCall = bridge.pendingCall(request.toolCallId) ?? {
       toolCallId: `${request.turnId ?? 0}:${request.toolCallId ?? 'unknown'}`,
       title: request.action,
@@ -495,12 +524,25 @@ function wireApprovals(state: AgentState, bridge: SessionBridge, session: KimiSe
       { optionId: 'approve_session', name: 'Approve for this session', kind: 'allow_always' as const },
       { optionId: 'reject_once', name: 'Reject', kind: 'reject_once' as const },
     ];
-    const response = await client.request<RequestPermissionResponse, RequestPermissionRequest>(
-      methods.client.session.requestPermission,
-      { sessionId: bridge.sessionId, toolCall, options },
-    );
-    const outcome = response.outcome;
-    if (outcome.outcome === 'cancelled') return { decision: 'cancelled' };
+    const response =
+      client !== undefined
+        ? await client.request<RequestPermissionResponse, RequestPermissionRequest>(
+            methods.client.session.requestPermission,
+            { sessionId: bridge.sessionId, toolCall, options },
+          )
+        : await v2!.request<{ outcome: { outcome: string; optionId?: string } }>(
+            'session/request_permission',
+            {
+              sessionId: bridge.sessionId,
+              title: toolCall.title,
+              ...(toolCall.kind === 'execute'
+                ? { subject: { command: toolCall.title, cwd: session.workDir } }
+                : {}),
+              options,
+            },
+          );
+    const outcome = response.outcome as { outcome: string; optionId?: string } | undefined;
+    if (outcome === undefined || outcome.outcome === 'cancelled') return { decision: 'cancelled' };
     if (outcome.optionId === 'approve_once') return { decision: 'approved' };
     if (outcome.optionId === 'approve_session') return { decision: 'approved', scope: 'session' };
     return { decision: 'rejected' };
@@ -512,6 +554,8 @@ function wireQuestions(state: AgentState, bridge: SessionBridge, session: KimiSe
   session.setQuestionHandler(async (request) => {
     const client = state.client;
     const question = request.questions[0];
+    // v2 questions come from `elicitation/create`, whose form shape differs;
+    // until that is wired the engine's question tool is told there is no answer.
     if (client === undefined || question === undefined) return null;
     if (state.capabilities.elicitationForm) {
       const labels = question.options.map((option) => option.label);
@@ -566,7 +610,7 @@ function wireQuestions(state: AgentState, bridge: SessionBridge, session: KimiSe
   });
 }
 
-async function prompt(
+export async function prompt(
   state: AgentState,
   params: PromptRequest,
   signal: AbortSignal,
@@ -668,11 +712,11 @@ async function maybeGenerateTitle(state: AgentState, entry: SessionEntry): Promi
   }
 }
 
-function cancel(state: AgentState, params: CancelNotification): void {
+export function cancel(state: AgentState, params: CancelNotification): void {
   state.sessions.get(params.sessionId)?.bridge.cancel();
 }
 
-async function close(state: AgentState): Promise<void> {
+export async function close(state: AgentState): Promise<void> {
   for (const entry of state.sessions.values()) await entry.bridge.dispose();
   state.sessions.clear();
   await state.harness?.close();

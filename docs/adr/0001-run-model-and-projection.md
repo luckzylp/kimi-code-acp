@@ -1,6 +1,6 @@
 # ADR 0001 — Own ACP adapter, run model, and projection rules
 
-- **Status**: accepted; M0–M4 landed (protocol surface, sessions, prompt content, login, activity projections)
+- **Status**: accepted; M0–M9 landed (v1 + v2 surface, sessions, prompt content, login, projections, steering, TUI commands)
 - **Coverage audit**: [`../protocol-coverage.md`](../protocol-coverage.md)
 - **Verified**: M0 chain (tag → workspace → single-file bundle → engine session
   → turn → coalesced stream → cancel) — see [Verification](#verification)

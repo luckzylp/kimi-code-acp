@@ -42,6 +42,12 @@ verified end to end.** Present today:
 - **protocol-level cancel**: `$/cancel_request` cancels the request it names,
   as clients that drop a request expect; `additionalDirectories` is honoured
   on `session/new`, `load` and `resume`
+- **ACP v1 and v2**: one connection routes on the client's `initialize` —
+  v1 gets today's surface, v2 (experimental draft) gets `auth/login`,
+  `providers/list`, the v2 update vocabulary (`tool_call_update`,
+  `plan_update`, native `terminal_update` / `terminal_output_chunk`, explicit
+  `state_update` running/idle) and a `session/prompt` response without a stop
+  reason; both share the same engine session machinery
 - **steering**: the `_session/steering` extension injects a follow-up into the
   running turn (`injected`), starts a detached turn when idle, or reports
   `promptRequired` to clients that own the fallback; a `session/prompt` that

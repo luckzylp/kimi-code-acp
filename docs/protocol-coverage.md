@@ -32,6 +32,25 @@ advertised** — the capability flag is never set, so a client does not call it;
 | `_session/steering` (extension) | implemented | injects into the running turn; `startedNewTurn` when idle; `promptRequired` opt-in; advertised via `initialize._meta.steering` |
 | `nes/start`, `nes/suggest`, `nes/close` | not advertised | next-edit suggestions are not a chat agent feature |
 
+## ACP v2 (experimental draft)
+
+One connection, both versions: `agentProtocolRouter` reads `initialize` and
+opens the v1 or the v2 app. v2 requests delegate to the same session machinery;
+`src/v2-updates.ts` translates the update vocabulary.
+
+| v2 method / update | Status | Notes |
+| --- | --- | --- |
+| `initialize` | implemented | answers protocol 2 with `info`, session capabilities, terminal `authMethods` (`methodId`), `_meta.steering` |
+| `session/new`, `resume`, `fork`, `list`, `delete`, `close` | implemented | delegated to the v1 session operations |
+| `session/prompt`, `session/cancel` | implemented | same run model; `state_update` running → idle around the run |
+| `session/set_config_option` | implemented | model / thinking / mode |
+| `providers/list` | implemented | the engine's configured providers (read-only) |
+| `providers/set`, `providers/disable` | rejected | the engine exposes no safe provider mutation to an agent |
+| `auth/login`, `auth/logout` | implemented | device-code flow / logout |
+| `mcp/message` (+ `mcp/connect`, `mcp/disconnect`) | not supported | needs MCP-over-ACP support in the engine (see below) |
+| `nes/*`, `document/*` | not advertised / ignored | editor features a chat agent does not use |
+| updates | translated | message chunks, `tool_call_update`, `terminal_update`, `terminal_output_chunk`, `plan_update`, commands/config/info/usage passthrough; unknown kinds dropped |
+
 ## Client methods the agent calls
 
 | Method | Status | Notes |

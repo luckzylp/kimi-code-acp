@@ -6,11 +6,12 @@
  */
 import { Readable, Writable } from 'node:stream';
 
-import { ndJsonStream } from '@agentclientprotocol/sdk';
+import { agentProtocolRouter, ndJsonStream as ndJsonStreamV2 } from '@agentclientprotocol/sdk/experimental/v2';
 
-import { createAgentApp } from './agent';
+import { close as closeAgent, createAgentApp, createAgentState } from './agent';
 import { runLogin } from './auth';
 import { log, redirectConsoleToStderr } from './log';
+import { createV2App } from './v2';
 import { AGENT_NAME, VERSION } from './version';
 
 const argv = process.argv.slice(2);
@@ -40,9 +41,14 @@ if (argv.includes('--help') || argv.includes('-h')) {
 
 redirectConsoleToStderr();
 
-const { app, close } = createAgentApp();
-const connection = app.connect(
-  ndJsonStream(
+// One connection, two protocol versions: the router reads the client's
+// `initialize` and opens the v1 or the v2 app accordingly (ADR: v2 support).
+const state = createAgentState();
+const { app } = createAgentApp(state);
+const { app: v2App } = createV2App(state);
+const router = agentProtocolRouter().withV1(app).withV2(v2App);
+const connection = router.connect(
+  ndJsonStreamV2(
     Writable.toWeb(process.stdout) as WritableStream<Uint8Array>,
     Readable.toWeb(process.stdin) as ReadableStream<Uint8Array>,
   ),
@@ -54,7 +60,7 @@ async function shutdown(reason: string): Promise<void> {
   closing = true;
   log.info('acp: shutting down', { reason });
   try {
-    await close();
+    await closeAgent(state);
   } catch (error) {
     log.warn('acp: shutdown failed', { error: error instanceof Error ? error.message : String(error) });
   } finally {
@@ -65,7 +71,7 @@ async function shutdown(reason: string): Promise<void> {
 process.stdin.on('end', () => {
   void shutdown('stdin closed');
 });
-connection.closed.finally(() => {
+connection.closed?.finally(() => {
   void shutdown('connection closed');
 });
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {

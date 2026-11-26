@@ -328,6 +328,91 @@ async function cancelRequestScenario() {
   );
 }
 
+/**
+ * ACP v2: the router negotiates the draft protocol, the same run model serves
+ * the turn, and updates come in the v2 vocabulary (state_update, message
+ * chunks with messageId, plan_update) with `session/prompt` answering no stop
+ * reason.
+ */
+async function v2Scenario() {
+  const script = [
+    { kind: 'text', text: 'v2 hello' },
+    { kind: 'tool', id: 'call_v2', name: 'Bash', arguments: JSON.stringify({ command: 'echo v2-tool' }) },
+    { kind: 'text', text: 'v2 done' },
+  ];
+  await withAgent({ script }, async ({ agent, workDir }) => {
+    const init = await agent.request('initialize', {
+      protocolVersion: 2,
+      info: { name: 'zed-v2-test', version: '0.0.0' },
+    });
+    if (init.protocolVersion !== 2) throw new Error(`v2 initialize answered ${String(init.protocolVersion)}`);
+    if (init.info?.name === undefined) throw new Error('v2 initialize returned no agent info');
+    if (!Array.isArray(init.authMethods) || init.authMethods.length === 0) {
+      throw new Error('v2 initialize advertised no auth methods');
+    }
+    agent.onRequest('session/request_permission', () => ({
+      outcome: { outcome: 'selected', optionId: 'approve_once' },
+    }));
+    ok(`v2 initialize → protocolVersion 2 (${init.info.name})`);
+
+    const created = await agent.request('session/new', { cwd: workDir });
+    if (typeof created.sessionId !== 'string') throw new Error('v2 session/new returned no sessionId');
+    ok('v2 session/new created a session');
+
+    const response = await agent.request(
+      'session/prompt',
+      { sessionId: created.sessionId, prompt: [{ type: 'text', text: 'hello v2' }] },
+      180_000,
+    );
+    if (response.stopReason !== undefined) {
+      throw new Error('v2 session/prompt carried a v1 stop reason');
+    }
+
+    const updatesV2 = updates(agent);
+    const text = updatesV2
+      .filter((update) => update.sessionUpdate === 'agent_message_chunk')
+      .map((update) => update.content?.text ?? '')
+      .join('');
+    if (text !== 'v2 hello') throw new Error(`v2 text was ${JSON.stringify(text)}`);
+    const chunk = updatesV2.find((update) => update.sessionUpdate === 'agent_message_chunk');
+    if (typeof chunk.messageId !== 'string') throw new Error('v2 chunk carried no messageId');
+    const states = updatesV2
+      .filter((update) => update.sessionUpdate === 'state_update')
+      .map((update) => update.state);
+    if (!states.includes('running') || !states.includes('idle')) {
+      throw new Error(`v2 state updates were ${JSON.stringify(states)}`);
+    }
+    ok('v2 turn streamed a message chunk and running → idle states');
+
+    // A tool turn: v2 has one `tool_call_update` and native terminal updates.
+    await agent.request(
+      'session/prompt',
+      { sessionId: created.sessionId, prompt: [{ type: 'text', text: 'run the command' }] },
+      180_000,
+    );
+    const toolUpdates = updates(agent).filter(
+      (update) => update.sessionUpdate === 'tool_call_update' && typeof update.toolCallId === 'string',
+    );
+    if (toolUpdates.length === 0) throw new Error('v2 turn projected no tool_call_update');
+    if (agent.requestsOf('session/request_permission').length === 0) {
+      throw new Error('v2 tool turn asked for no permission');
+    }
+    const terminalChunks = updates(agent).filter(
+      (update) => update.sessionUpdate === 'terminal_output_chunk',
+    );
+    if (terminalChunks.length === 0) {
+      throw new Error(`v2 terminal produced no output chunk; kinds=${updates(agent).map((u) => u.sessionUpdate).join(',')}`);
+    }
+    const terminalOutput = terminalChunks.map((update) => update.data ?? '').join('');
+    if (!terminalOutput.includes('v2-tool')) throw new Error('v2 terminal chunk lacked the output');
+    ok('v2 tool turn: tool_call_update, permission request, terminal_output_chunk');
+
+    const providers = await agent.request('providers/list', {});
+    if (!Array.isArray(providers.providers)) throw new Error('providers/list returned no providers array');
+    ok(`providers/list returned ${String(providers.providers.length)} provider(s)`);
+  });
+}
+
 /** A client that appends chunks gets `terminal_output_delta` instead. */
 async function terminalDeltaScenario() {
   const command = 'echo delta-hello';
@@ -697,6 +782,7 @@ await turnScenario();
 await cancelScenario();
 await terminalScenario();
 await terminalDeltaScenario();
+await v2Scenario();
 await surfaceScenario();
 await promptContentScenario();
 await planScenario();
