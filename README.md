@@ -153,10 +153,12 @@ verified end to end.** Present today:
   two need child-agent routing / a patch generator).
 - **goal control**: the AIR `_session/goal` extension (`set` / `clear`) drives the
   engine's goal and keeps the goal card in sync with `/goal`
-- **steering**: the `_session/steering` extension injects a follow-up into the
-  running turn (`injected`), starts a detached turn when idle, or reports
+- **steering and queueing**: the `_session/steering` extension answers
+  `injected` for a running turn, starts a detached turn when idle, or reports
   `promptRequired` to clients that own the fallback; a `session/prompt` that
-  arrives mid-run is steered instead of rejected
+  arrives mid-run is queued behind the running turn (the engine runs it as the
+  next turn) and its response carries that turn's own stop reason — never a
+  placeholder
 - **slash commands with TUI parity**: goal (status/pause/resume/cancel/create),
   swarm, tower, compact, status, usage, permission modes, model, effort, title,
   undo, tasks, add-dir, mcp, plugins, init, logout, plus plugin commands and

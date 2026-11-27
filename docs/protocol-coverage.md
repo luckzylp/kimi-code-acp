@@ -31,7 +31,8 @@ advertised** — the capability flag is never set, so a client does not call it;
 | `session/prompt` | implemented | run model, text/image/resource blocks |
 | `session/cancel` | implemented | cancels the run, including a pending permission dialog |
 | `$/cancel_request` | implemented | the SDK aborts the request signal; the handler cancels the run |
-| `_session/steering` (extension) | implemented | injects into the running turn; `startedNewTurn` when idle; `promptRequired` opt-in; advertised via `initialize._meta.steering` |
+| `_session/steering` (extension) | implemented | answers `injected` for a running turn (the engine queues the message as the next turn); `startedNewTurn` when idle; `promptRequired` opt-in; advertised via `initialize._meta.steering` |
+| prompt while busy | implemented | queued behind the running turn (FIFO, one run per request); each response settles with its own turn's stop reason; a cancel settles the queued prompts as `cancelled` |
 | `_session/goal` (AIR extension) | implemented | `set` creates/replaces the engine goal, `clear` cancels it and closes the goal card; served on v1 and v2 |
 | `_session/rewind` (AIR extension) | implemented | drops the user message a cursor names and everything after it (`undoHistory` per dropped turn); `{rewound:false,reason:'busy'}` mid-run; unknown cursors are rejected |
 | `_session/rename` (AIR extension) | implemented | renames through `harness.renameSession`; the title update is emitted and `session/list` reflects it |

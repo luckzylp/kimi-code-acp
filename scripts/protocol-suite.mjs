@@ -785,7 +785,7 @@ test('_session/steering injects into a running turn and reports promptRequired w
   );
 });
 
-test('a prompt during a run is steered, not rejected', async () => {
+test('a prompt during a run is steered and settles with that turn', async () => {
   await withAgent(
     { script: [{ kind: 'text', text: 'slow' }, { kind: 'text', text: 'second' }], delayMs: 3_000 },
     async ({ agent, workDir }) => {
@@ -793,10 +793,36 @@ test('a prompt during a run is steered, not rejected', async () => {
       const sessionId = await newSession(agent, workDir);
       const running = prompt(agent, sessionId, 'start');
       await new Promise((resolvePromise) => setTimeout(resolvePromise, 400));
-      const steered = await prompt(agent, sessionId, 'and this');
-      if (steered.stopReason !== 'end_turn') throw new Error(`steered stopReason ${steered.stopReason}`);
+      const startedAt = Date.now();
+      const steered = await prompt(agent, sessionId, 'and this', 60_000);
+      // The steered request must wait for the running turn, not return at once.
+      if (Date.now() - startedAt < 1_000) throw new Error('the steered prompt returned before the turn ended');
+      const first = await running;
+      if (steered.stopReason !== first.stopReason) {
+        throw new Error(`steered ${steered.stopReason} vs running ${first.stopReason}`);
+      }
       if (!lastText(agent).includes('Message steered')) throw new Error('no steering note');
-      await running;
+    },
+  );
+});
+
+test('a cancel after steering settles only the steered prompt as cancelled', async () => {
+  await withAgent(
+    { script: [{ kind: 'text', text: 'slow' }], delayMs: 20_000 },
+    async ({ agent, workDir }) => {
+      await boot(agent);
+      const sessionId = await newSession(agent, workDir);
+      const running = prompt(agent, sessionId, 'start');
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 300));
+      const steered = prompt(agent, sessionId, 'and this', 60_000);
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 200));
+      agent.notify('session/cancel', { sessionId });
+      const [first, second] = await Promise.all([running, steered]);
+      // The engine ends the interrupted turn as `completed`; the cancel lands on
+      // the steered message's own turn, so only that request reports `cancelled`.
+      if (first.stopReason !== 'end_turn' || second.stopReason !== 'cancelled') {
+        throw new Error(`running ${first.stopReason} / steered ${second.stopReason}`);
+      }
     },
   );
 });

@@ -123,8 +123,16 @@ Rules:
    arrives after the prompt settled) streams normally and is introduced by one
    `user_message_chunk` note derived from its origin. That note is what keeps
    engine-started work visible; turns inside a run get none.
-3. `prompt.submitted` / `prompt.steered` never open a second run: steering
-   folds into the running turn, which settles at its end.
+3. A prompt that arrives mid-run is **queued, never rejected**. Engine 2.8's
+   `session.steer()` emits `prompt.queued`, ends the running turn at the step
+   boundary (reported `completed`) and runs the message as the **next turn**;
+   the adapter keeps one run per request (FIFO), promotes the next queued run
+   at `turn.ended`/`turn.prompt`, and each `session/prompt` settles with its
+   own turn's outcome. This is the per-request settlement claude-code-acp gets
+   from its turn queue; an earlier revision returned a placeholder
+   `end_turn` at once, which marked the message done while the engine was
+   still working. `_session/steering` keeps its `injected` answer (the message
+   was accepted; its turn streams without an owning request).
 4. `session/cancel` cancels the run: for a goal run it pauses the goal first
    (otherwise the engine relaunches a continuation on the next idle), then
    `session.cancel()`. One `session/prompt`, exactly one response.
@@ -257,7 +265,7 @@ The chain was re-validated on 2026-11-26 against `@moonshot-ai/kimi-code@2.8.1`
 | goal / subagent cards | `node scripts/test.mjs` | unit tests cover card ids, lifecycle status mapping, budget text, subagent states |
 | wire contract | `node scripts/test.mjs` | every v1/v2 update, config option and handshake the adapter emits parses with the ACP SDK's zod schemas |
 | goal extension | `node scripts/e2e.mjs` | `_session/goal set` opens the goal card, `/goal status` reads it, `_session/goal clear` closes it |
-| protocol suite | `node scripts/protocol-suite.mjs` | 94 cases: handshake, lifecycle (new/load/resume/fork/delete/close), prompts, cancel/steering, permission kinds, terminals, declared + hosted MCP (including a failing server), goal, cursors + rewind (including a reload after rewind), concurrent sessions, workspace skills, structured notices, compaction shapes, AIR meta/goal/rename, provider mutations, modes auto/yolo/default, thinking option, /tower and /effort, logout, every TUI command (normal + failing), v2 lifecycle/steering/goal and its errors, malformed JSON-RPC frames, custom API keys, session titles (AI + fallback) |
+| protocol suite | `node scripts/protocol-suite.mjs` | 95 cases: handshake, lifecycle (new/load/resume/fork/delete/close), prompts, cancel/steering, permission kinds, terminals, declared + hosted MCP (including a failing server), goal, cursors + rewind (including a reload after rewind), concurrent sessions, workspace skills, structured notices, compaction shapes, AIR meta/goal/rename, provider mutations, modes auto/yolo/default, thinking option, /tower and /effort, logout, every TUI command (normal + failing), v2 lifecycle/steering/goal and its errors, malformed JSON-RPC frames, custom API keys, session titles (AI + fallback) |
 | protocol cancel | `node scripts/e2e.mjs` | `$/cancel_request` cancels the prompt it names |
 | replay plan | `node scripts/e2e.mjs` | `session/load` restores the plan from the TodoList call in history |
 | install tree | `node scripts/pack.mjs` | 2.6 MB tarball, installed `node_modules` + lockfile, handshake from the installed copy |

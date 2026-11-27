@@ -93,6 +93,8 @@ export class SessionBridge {
   private readonly toolCalls: ToolCalls;
   private readonly unsubscribe: () => void;
   private run: Run | undefined;
+  /** Runs for prompts steered behind the running turn, in submission order. */
+  private readonly queuedRuns: Run[] = [];
   /** The last turn id the engine reported, for `predictNextPrompt`. */
   private lastTurnId: number | undefined;
   /** User message ids in order, for cursor announcements and rewind. */
@@ -136,9 +138,39 @@ export class SessionBridge {
     return this.outbox.push(notification);
   }
 
-  /** True while a run owns the session (a prompt is in flight). */
+  /** True while a run owns the session, or a steered prompt awaits its turn. */
   isBusy(): boolean {
-    return this.run !== undefined && !this.run.settled;
+    return (
+      (this.run !== undefined && !this.run.settled) ||
+      this.queuedRuns.some((run) => !run.settled)
+    );
+  }
+
+  /**
+   * A prompt that arrives during a run. The engine queues it (`prompt.queued`),
+   * ends the running turn at the step boundary and runs this message as the
+   * next turn, so the returned promise settles with that follow-up turn's own
+   * outcome — the same per-request settlement a queued `session/prompt` has in
+   * claude-code-acp.
+   */
+  steerAsRun(input: string | readonly PromptPart[]): Promise<StopReason> {
+    return new Promise<StopReason>((resolve, reject) => {
+      const run: Run = { resolve, reject, settled: false };
+      this.queuedRuns.push(run);
+      this.options.session.steer(input as string | PromptPart[]).catch((error: unknown) => {
+        const index = this.queuedRuns.indexOf(run);
+        if (index !== -1) this.queuedRuns.splice(index, 1);
+        this.fail(run, error);
+      });
+    });
+  }
+
+  /** Hand the session to the first steered prompt once no run owns it. */
+  private promoteQueued(): void {
+    if (this.run !== undefined && !this.run.settled) return;
+    const next = this.queuedRuns.shift();
+    if (next === undefined || next.settled) return;
+    this.run = next;
   }
 
   /** Inject a message into the running turn (ACP `_session/steering`). */
@@ -318,6 +350,9 @@ export class SessionBridge {
     await this.outbox.drain();
     const run = this.run;
     if (run !== undefined && !run.settled) this.settle(run, 'cancelled');
+    for (const queued of this.queuedRuns.splice(0)) {
+      if (!queued.settled) this.settle(queued, 'cancelled');
+    }
   }
 
   private handleEvent(event: Event): void {
@@ -326,6 +361,8 @@ export class SessionBridge {
     // union does not list it, but the engine emits it (and it carries the id a
     // cursor needs).
     if ((event.type as string) === 'turn.prompt') {
+      // A turn the engine starts for a steered prompt belongs to that prompt's run.
+      this.promoteQueued();
       const prompt = event as unknown as {
         readonly origin?: { readonly kind?: string };
         readonly promptId?: string;
@@ -395,6 +432,8 @@ export class SessionBridge {
         // steps inside it), so the turn's end is the run's end — the same
         // settlement the upstream ACP server uses.
         this.settle(run, turnStopReason(event.reason, event.error));
+        // The engine runs a steered message as the turn after this one.
+        this.promoteQueued();
         return;
       }
       case 'prompt.submitted': {

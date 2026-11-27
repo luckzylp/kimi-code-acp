@@ -920,9 +920,20 @@ export async function prompt(
   // A prompt that arrives while a run is live is steered into it instead of
   // being rejected; the running turn's own updates carry the answer.
   if (entry.bridge.isBusy()) {
-    await entry.bridge.steer(parts);
-    await entry.bridge.note('Message steered into the running turn.');
-    return { stopReason: 'end_turn' };
+    // The engine queues the message, ends the running turn at the step boundary
+    // and runs it as the next turn; this request owns that turn and settles with
+    // its own outcome (never a placeholder), like a queued `session/prompt` in
+    // claude-code-acp.
+    await entry.bridge.note('Message steered behind the running turn.');
+    const onSteerAbort = (): void => entry.bridge.cancel();
+    signal.addEventListener('abort', onSteerAbort, { once: true });
+    try {
+      const stopReason = await entry.bridge.steerAsRun(parts);
+      if (stopReason === 'end_turn') void entry.bridge.emitUsage();
+      return { stopReason };
+    } finally {
+      signal.removeEventListener('abort', onSteerAbort);
+    }
   }
   const skill = built.text.length === 0 ? undefined : await matchSkill(entry.session, built.text);
   // A protocol-level `$/cancel_request` aborts this request's signal; the run
