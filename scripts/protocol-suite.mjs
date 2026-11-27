@@ -1784,7 +1784,7 @@ test('a failed title request falls back to the first user line', async () => {
 });
 
 
-test('add-dir is not advertised but still runs', async () => {
+test('redundant commands are not advertised but still run', async () => {
   await withAgent({ script: [] }, async ({ agent, workDir }) => {
     await boot(agent);
     const sessionId = await newSession(agent, workDir);
@@ -1796,52 +1796,22 @@ test('add-dir is not advertised but still runs', async () => {
       .filter((update) => update.sessionUpdate === 'available_commands_update')
       .flatMap((update) => update.availableCommands ?? [])
       .map((command) => command.name);
-    if (advertised.includes('add-dir')) throw new Error('add-dir is still advertised');
-    const { text } = await runCommand(agent, sessionId, '/add-dir /tmp');
-    if (!text.includes('Added /tmp')) throw new Error(`/add-dir still runs? ${text.slice(0, 120)}`);
+    for (const hidden of ['add-dir', 'model', 'effort', 'plugins', 'plan', 'yolo', 'auto']) {
+      if (advertised.includes(hidden)) throw new Error(`${hidden} is still advertised`);
+    }
+    for (const name of advertised) {
+      if (name.includes(':')) throw new Error(`plugin command advertised: ${name}`);
+    }
+    const addDir = await runCommand(agent, sessionId, '/add-dir /tmp');
+    if (!addDir.text.includes('Added /tmp')) throw new Error(`/add-dir still runs? ${addDir.text.slice(0, 120)}`);
+    const models = await runCommand(agent, sessionId, '/model');
+    if (!/fake/.test(models.text)) throw new Error(`/model still runs? ${models.text.slice(0, 120)}`);
   });
 });
 
-test('/plan, /yolo and /auto move the mode picker like set_mode', async () => {
-  await withAgent({ script: [] }, async ({ agent, workDir }) => {
-    await boot(agent);
-    const sessionId = await newSession(agent, workDir);
-    const modes = () =>
-      updates(agent)
-        .filter((update) => update.sessionUpdate === 'current_mode_update')
-        .map((update) => update.currentModeId);
-    const plan = await runCommand(agent, sessionId, '/plan');
-    if (!plan.text.includes('Mode set to plan')) throw new Error(`/plan: ${plan.text}`);
-    await runCommand(agent, sessionId, '/plan');
-    await runCommand(agent, sessionId, '/yolo');
-    await runCommand(agent, sessionId, '/auto');
-    await runCommand(agent, sessionId, '/permission plan');
-    expectModes(modes(), ['plan', 'default', 'yolo', 'auto', 'plan']);
-  });
-});
 
-test('a cleared TodoList empties the plan', async () => {
-  await withAgent(
-    {
-      script: [
-        { kind: 'tool', id: 'todo_1', name: 'TodoList', arguments: JSON.stringify({ todos: [{ title: 'first', status: 'pending' }, { title: 'second', status: 'in_progress' }] }) },
-        { kind: 'tool', id: 'todo_2', name: 'TodoList', arguments: JSON.stringify({ todos: [] }) },
-        { kind: 'text', text: 'done' },
-      ],
-    },
-    async ({ agent, workDir }) => {
-      await boot(agent);
-      const sessionId = await newSession(agent, workDir);
-      await prompt(agent, sessionId, 'plan it', 120_000);
-      const plans = updates(agent).filter((update) => update.sessionUpdate === 'plan');
-      if (plans.length !== 2) throw new Error(`expected two plan updates, got ${plans.length}`);
-      if (plans[0].entries?.length !== 2) throw new Error(`first plan: ${JSON.stringify(plans[0])}`);
-      if ((plans[1].entries ?? null) === null || plans[1].entries.length !== 0) {
-        throw new Error(`cleared plan: ${JSON.stringify(plans[1])}`);
-      }
-    },
-  );
-});
+
+
 
 
 test('rewind reaches a skill turn and drops what follows it', async () => {

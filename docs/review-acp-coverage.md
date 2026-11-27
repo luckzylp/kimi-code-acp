@@ -178,10 +178,10 @@ v2 不是独立实现：`agentProtocolRouter().withV1(app).withV2(v2App)` 在同
 | 级别 | 编号 | 问题 | 依据 | 建议 |
 |---|---|---|---|---|
 | **P1** | R1 | **rewind 的 undo 计数单位错位风险**：`_session/rewind` 用 `count = 适配器记录的用户消息数 - 游标索引` 调 `undoHistory(count)`，但引擎 undo 以 **turn** 为单位；goal 续跑、steer、后台通知触发的 turn 会插在两条用户消息之间，导致少删 | 现有用例只覆盖"两条纯用户 prompt"场景；`forkTurnSlice.ts` 用 `turn.prompt` 记录作 turn 边界 | 补一个"goal 续跑后 rewind"的用例验证；若错位，改为按引擎 `undoService.availability()`/wire 记录计算 |
-| P1 | R2 | `/plan`、`/yolo`、`/auto` 未注册，手输会当 prompt 发给模型 | TUI 有这三个命令；`set_mode` 已支持四模式 | 注册为 `setMode` 别名，各 1 行 |
+| P1 | R2 | `/plan`、`/yolo`、`/auto` 未注册，手输会当 prompt 发给模型 | TUI 有这三个命令；`set_mode` 已支持四模式 | **已决定不暴露**：模式由 `session/set_mode` / 配置选项承担，不作为 ACP 命令（手输则按未知命令处理） |
 | P1 | R3 | 忙时 `session/prompt` 返回 `end_turn` 而非排队 | ACP 规范；claude-code-acp 排队 | ADR 已记录分歧；可考虑返回 `{stopReason:'cancelled'}`？不——保持现状但对 AIR 返回 `steered` 提示 |
 | P1 | R4 | AI 标题只支持 `openai`/`kimi`/`openai_responses` 端点；`anthropic`/`google-genai`/`bedrock`/`vertexai` provider 一律退回首行 | `title.ts` 显式分支 | 可接受（用户 provider 均为 openai 系）；文档已注明 |
-| P2 | R5 | `plan_removed` 未发 | 清空 TodoList 后 Zed 残留 | tool.call 的 todo_list 为空时发 `plan_removed` |
+| P2 | R5 | 清空 TodoList 时 plan 未清空 | Zed 可能残留旧 plan | **已决定不改**：空 plan 更新与 `plan_removed` 都不发，保持只发非空 plan |
 | P2 | R6 | `fsRead/fsWrite` 读取但未用；声明了 `terminal` 能力的客户端（非 Zed）不会收到 terminal/* | 本地 agent 场景无害 | 文档注明"仅本地工作区" |
 | P2 | R7 | `providers/list` 的 `supported` 只含当前 type、`required` 恒 false | schema 语义是"agent 支持的协议列表" | 改为引擎支持的 7 种 type |
 | P2 | R8 | v2 pinned 1.3 draft，Zed 若升级到 2.12 v2 形状会断 | 2.12 v2 重命名方法、移除 `mcp/connect` | ADR 标注触发条件与迁移路径 |
@@ -211,11 +211,10 @@ v2 不是独立实现：`agentProtocolRouter().withV1(app).withV2(v2App)` 在同
 - **对 Zed 1.29.3 的 ACP v1 面是可用的**：lifecycle、prompt、权限、终端、配置、通知、压缩、游标、标题全部打通，并有 94 个可重复用例。
 - **与 claude-code-acp 的主要差距集中在"多 agent 可见性"（subagent/async task）和"会话索引"**，不是基础协议；这两块需要引擎侧事件路由而非协议补丁。
 - **v2 是投影而非对等实现**，对当前 Zed 足够，但有 draft 版本锁定风险。
-- **需要立即处理的**：R1（验证 rewind 计数）、R2（补 `/plan` `/yolo` `/auto`）。
+- **已处理**：R1（rewind 锚点对齐引擎规则）；R2/R5 按产品决定不做命令暴露与空 plan 更新。
 
 ### 建议路线图
 
-1. R2 命令别名（半天）+ R5 `plan_removed`（半天）
 2. R1 rewind 计数验证与修正（1 天）
 3. subagent_update 投影（P1，2–3 天）：先探明 `session.onEvent` 是否收到子 agent 事件
 4. AIR session index（batch_get / list subscribe）（2 天）

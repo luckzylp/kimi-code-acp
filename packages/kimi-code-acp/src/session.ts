@@ -109,8 +109,6 @@ export class SessionBridge {
   private lastEntity: CursorEntity | undefined;
   /** Message ids of child agents' streams, by agent id (reset per child turn). */
   private readonly childMessageIds = new Map<string, string>();
-  /** Whether a plan was shown, so clearing it is reported (an empty `plan`). */
-  private planShown = false;
   /** The compaction on screen, for `compaction_update` lifecycle pushes. */
   private compactionId: string | undefined;
   private disposed = false;
@@ -436,15 +434,8 @@ export class SessionBridge {
       }
       case 'tool.call.started': {
         if (event.display?.kind === 'todo_list') {
-          const plan = planNotification(
-            this.options.sessionId,
-            event.display.items,
-            this.planShown,
-          );
-          if (plan !== null) {
-            this.planShown = event.display.items.length > 0;
-            void this.outbox.push(plan);
-          }
+          const plan = planNotification(this.options.sessionId, event.display.items);
+          if (plan !== null) void this.outbox.push(plan);
         }
         this.toolCalls.started(event);
         this.lastEntity = { type: 'tool_call', toolCallId: acpToolCallId(event.turnId, event.toolCallId) };

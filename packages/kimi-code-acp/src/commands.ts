@@ -267,6 +267,8 @@ const MCP: SlashCommandSpec = {
 
 const PLUGINS: SlashCommandSpec = {
   name: 'plugins',
+  // Available when typed; the client has native pickers for this.
+  hidden: true,
   description: 'List installed plugins',
   run: async (runtime) => {
     const plugins = await runtime.session.listPlugins();
@@ -282,6 +284,8 @@ const PLUGINS: SlashCommandSpec = {
 
 const MODEL: SlashCommandSpec = {
   name: 'model',
+  // Available when typed; the client has native pickers for this.
+  hidden: true,
   description: 'Switch the model',
   argumentHint: '[alias]',
   run: async (runtime, args) => {
@@ -301,6 +305,8 @@ const MODEL: SlashCommandSpec = {
 
 const EFFORT: SlashCommandSpec = {
   name: 'effort',
+  // Available when typed; the client has native pickers for this.
+  hidden: true,
   description: 'Set the thinking effort',
   argumentHint: '<off|low|medium|high>',
   run: async (runtime, args) => {
@@ -338,36 +344,6 @@ async function switchMode(runtime: CommandRuntime, mode: 'default' | 'plan' | 'a
   return { text: `Mode set to ${mode}.` };
 }
 
-const PLAN: SlashCommandSpec = {
-  name: 'plan',
-  description: 'Toggle plan mode, or turn it on/off',
-  argumentHint: '[on|off]',
-  run: async (runtime, args) => {
-    const arg = args.trim().toLowerCase();
-    if (arg === 'clear') return { text: 'Plan mode has no plan file here; /plan toggles the mode.' };
-    if (arg.length > 0 && arg !== 'on' && arg !== 'off') {
-      return { text: 'Usage: /plan [on|off]' };
-    }
-    const status = await runtime.session.getStatus();
-    const on = arg.length === 0 ? !status.planMode : arg === 'on';
-    // Leaving plan mode restores manual approvals rather than the previous
-    // permission mode: the engine reports no previous mode to restore.
-    return switchMode(runtime, on ? 'plan' : 'default');
-  },
-};
-
-const YOLO: SlashCommandSpec = {
-  name: 'yolo',
-  description: 'Ask When Needed mode: routine edits and commands run automatically; risky actions still ask',
-  run: async (runtime) => switchMode(runtime, 'yolo'),
-};
-
-const AUTO: SlashCommandSpec = {
-  name: 'auto',
-  description: 'Never Ask mode: everything runs and is decided automatically',
-  run: async (runtime) => switchMode(runtime, 'auto'),
-};
-
 const LOGOUT: SlashCommandSpec = {
   name: 'logout',
   description: 'Sign out of the Kimi account',
@@ -384,9 +360,6 @@ export const BUILTIN_COMMANDS: readonly SlashCommandSpec[] = [
   GOAL,
   SWARM,
   TOWER,
-  PLAN,
-  YOLO,
-  AUTO,
   COMPACT,
   INIT,
   UNDO,

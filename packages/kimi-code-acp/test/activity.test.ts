@@ -130,11 +130,4 @@ describe('subagent projection', () => {
   });
 });
 
-describe('plan clearing', () => {
-  it('reports an emptied list as an empty plan only once a plan was shown', () => {
-    expect(planNotification(SESSION, [], false)).toBeNull();
-    expect(planNotification(SESSION, [], true)).toMatchObject({
-      update: { sessionUpdate: 'plan', entries: [] },
-    });
-  });
-});
+

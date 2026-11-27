@@ -481,7 +481,6 @@ function scheduleSurfaceUpdates(entry: SessionEntry): void {
 
 /** Built-in commands + plugin commands + skills, as ACP advertises them. */
 async function availableCommands(session: KimiSession): Promise<AvailableCommand[]> {
-  const plugins = await pluginSlashCommands(session);
   let skills: AvailableCommand[] = [];
   try {
     skills = (await session.listSkills()).map((skill) => ({
@@ -492,7 +491,7 @@ async function availableCommands(session: KimiSession): Promise<AvailableCommand
   } catch {
     skills = [];
   }
-  return [...availableBuiltinCommands(), ...plugins.advertised, ...skills];
+  return [...availableBuiltinCommands(), ...skills];
 }
 
 /**

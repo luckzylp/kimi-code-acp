@@ -111,7 +111,7 @@ for registry agents, or AIR moving to v2). Checklist:
 | `tool_call` | implemented | title, kind, status, `rawInput`, diff content, readable-file locations, `_meta.terminal_info` |
 | `tool_call_update` | implemented | streamed arguments, status, result preview, `rawOutput`, `_meta.terminal_output` / `terminal_exit` |
 | `plan` | implemented | from the engine's `TodoList` display; replayed from history |
-| `available_commands_update` | implemented | built-in commands (goal, swarm, compact, status, …), plugin commands and session skills, all invokable as `/name` |
+| `available_commands_update` | implemented | built-in commands that have no native ACP surface (goal, swarm, tower, compact, status, usage, permission, title, undo, tasks, mcp, init, logout, help), plus session skills. `/model`, `/effort`, `/plugins`, `/add-dir` stay callable but are not advertised (the client has pickers, or the command is internal); plugin commands and `/plan`, `/yolo`, `/auto` are not advertised either — modes live in `session/set_mode` / config options |
 | `current_mode_update` | implemented | `session/set_mode` |
 | `config_option_update` | implemented | model / thinking / mode changes |
 | `session_info_update` | implemented | engine-generated titles (`session.meta.updated`) |
