@@ -1,5 +1,5 @@
 /**
- * Turns the engine starts on its own (ADR 0001, Decision 2.4).
+ * Turns the engine starts on its own (ADR 0001, Decision 2, rule 2).
  *
  * The engine launches turns no `session/prompt` asked for: a background task
  * finished, a schedule fired, a goal continued. While a run is live those turns

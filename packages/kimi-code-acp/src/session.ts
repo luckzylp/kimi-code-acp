@@ -2,11 +2,17 @@
  * One ACP session bound to one engine session (ADR 0001, Decisions 2 and 4).
  *
  * The unit of work is a **run**: one `session/prompt`. A run does not end when a
- * turn ends — the engine keeps launching turns for the same request (a goal
- * continuation, a finished background task), and those belong to the run. It
- * ends when the engine ends the turn (2.8 runs a prompt as one turn, with model
- * steps and tool calls as steps inside it), or when the session reports idle. That is what makes goal and swarm workable, and
- * what keeps the client's composing state truthful for the whole run.
+ * turn ends — the engine keeps launching turns for the same request (a finished
+ * background task, a goal continuation), and those belong to the run. It ends
+ * when the engine ends the turn (2.8 runs a prompt as one turn, with model steps
+ * and tool calls as steps inside it) **and** nothing the turn started is still
+ * running, or when the session reports idle. That is what makes goal and swarm
+ * workable, and what keeps the client's composing state truthful for the whole
+ * run: a command that outlives its turn is still work the user is waiting on.
+ *
+ * The one exception is deliberate backgrounding: a tool call that the model
+ * launched with `run_in_background` returned control to the user on purpose
+ * (a dev server, a watcher), so it does not hold the run open.
  *
  * Every update goes through one ordered outbox; a run's response is only
  * answered after the outbox has drained, so the client never sees the answer
@@ -68,6 +74,27 @@ interface Run {
   settled: boolean;
 }
 
+/** A run whose turn ended while background work it started still runs. */
+interface DeferredSettlement {
+  readonly run: Run;
+  readonly reason: StopReason;
+}
+
+/**
+ * How long a settled turn waits for the turn the engine starts to report a
+ * finished background task. The engine launches it as soon as the task ends
+ * (`turn.prompt` with a `task` origin), so this only covers the scheduling gap;
+ * longer and a dropped notification would leave the client composing forever.
+ */
+const TASK_FOLLOW_UP_GRACE_MS = 1_000;
+
+/** The background-task facts this bridge reads (`background.task.*` payloads). */
+interface BackgroundTaskInfoLike {
+  readonly taskId?: unknown;
+  readonly kind?: unknown;
+  readonly parentToolCallId?: unknown;
+}
+
 export interface SessionBridgeOptions {
   readonly sessionId: string;
   readonly session: KimiSession;
@@ -89,6 +116,8 @@ export interface SessionBridgeOptions {
   readonly subagents?: boolean;
   /** The session's working directory, reported for a child that inherits it. */
   readonly cwd?: string;
+  /** Grace before a finished task's continuation turn is expected (tests shrink it). */
+  readonly followUpGraceMs?: number;
   readonly send: (notification: SessionNotification) => Promise<void> | void;
 }
 
@@ -115,6 +144,15 @@ export class SessionBridge {
   private messageId: string | undefined;
   /** The goal currently on screen, so changes update its card instead of adding one. */
   private goalId: string | undefined;
+  /** Whether a main-agent turn is running, i.e. the run has live work. */
+  private turnActive = false;
+  /** Background tasks this run started and the client is still waiting on. */
+  private readonly heldTasks = new Set<string>();
+  /** Tool calls launched with `run_in_background`: the model returned control. */
+  private readonly backgroundCalls = new Set<string>();
+  /** A turn ended while held tasks run; settle once they are gone. */
+  private deferred: DeferredSettlement | undefined;
+  private deferredTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(private readonly options: SessionBridgeOptions) {
     this.outbox = new Outbox((notification) => options.send(notification as SessionNotification));
@@ -348,11 +386,20 @@ export class SessionBridge {
     }
   }
 
-  /** Ask the engine to stop the run. The turn's `cancelled` outcome settles it. */
+  /**
+   * Ask the engine to stop the run. The turn's `cancelled` outcome settles it;
+   * a run that is only waiting on its own background work has no turn left to
+   * cancel, so it stops the tasks it is waiting on and settles here.
+   */
   cancel(): void {
     void this.options.session.cancel().catch((error: unknown) => {
       log.warn('acp: cancel failed', { sessionId: this.sessionId, error: describe(error) });
     });
+    for (const taskId of this.heldTasks) this.stopTask(taskId);
+    this.heldTasks.clear();
+    const deferred = this.deferred;
+    this.clearDeferred();
+    if (deferred !== undefined && !deferred.run.settled) this.settle(deferred.run, 'cancelled');
   }
 
   async dispose(): Promise<void> {
@@ -362,6 +409,8 @@ export class SessionBridge {
     this.assistant.flushNow();
     this.thought.flushNow();
     await this.outbox.drain();
+    this.clearDeferred();
+    this.heldTasks.clear();
     const run = this.run;
     if (run !== undefined && !run.settled) this.settle(run, 'cancelled');
     for (const queued of this.queuedRuns.splice(0)) {
@@ -380,6 +429,12 @@ export class SessionBridge {
     // are session-level, their live traffic carries the child's agent id.
     if ((event.type as string).startsWith('subagent.')) {
       this.handleSubagentEvent(event);
+      return;
+    }
+    // Background tasks outlive the tool call that started them, so they are
+    // read before the child-agent routing drops non-text child events.
+    if ((event.type as string).startsWith('background.task.')) {
+      this.handleBackgroundTask(event);
       return;
     }
     const agentId = (event as { agentId?: unknown }).agentId;
@@ -410,9 +465,13 @@ export class SessionBridge {
     }
     switch (event.type) {
       case 'turn.started': {
+        this.turnActive = true;
+        // A turn that started after a task ended owns the next stretch of work;
+        // the grace timer must not settle the run behind its back.
+        this.cancelDeferredTimer();
         this.messageId = undefined;
         if (this.run === undefined || this.run.settled) {
-          // Nobody prompted this turn: say what set the agent off (Decision 2.4).
+          // Nobody prompted this turn: say what set the agent off (Decision 2, rule 2).
           // A turn inside a run is continuation bookkeeping and stays silent.
           const note = describeEngineTurn(event.origin, event.prompt);
           if (note !== undefined) {
@@ -437,6 +496,12 @@ export class SessionBridge {
           const plan = planNotification(this.options.sessionId, event.display.items);
           if (plan !== null) void this.outbox.push(plan);
         }
+        // `run_in_background` is the model handing the client back its turn
+        // (a servers/watchers case): that task must not hold the run open.
+        const args = event.args as { readonly run_in_background?: unknown } | null | undefined;
+        if (typeof args === 'object' && args !== null && args.run_in_background === true) {
+          this.backgroundCalls.add(event.toolCallId);
+        }
         this.toolCalls.started(event);
         this.lastEntity = { type: 'tool_call', toolCallId: acpToolCallId(event.turnId, event.toolCallId) };
         return;
@@ -454,6 +519,7 @@ export class SessionBridge {
         return;
       }
       case 'turn.ended': {
+        this.turnActive = false;
         this.lastTurnId = event.turnId;
         this.toolCalls.settleTurn(
           event.turnId,
@@ -470,8 +536,22 @@ export class SessionBridge {
         }
         // Engine 2.8 runs a prompt as one turn (model steps and tool calls are
         // steps inside it), so the turn's end is the run's end — the same
-        // settlement the upstream ACP server uses.
-        this.settle(run, turnStopReason(event.reason, event.error));
+        // settlement the upstream ACP server uses. Only a command the turn
+        // backgrounded (its timeout moved it to background) keeps the run
+        // alive: the engine reports it from the turn it starts on completion,
+        // and until then the client must stay busy rather than think the
+        // request is answered while its output is still arriving.
+        const reason = turnStopReason(event.reason, event.error);
+        if (reason !== 'cancelled' && this.heldTasks.size > 0) {
+          this.deferred = { run, reason };
+          log.info('acp: run waits for background work', {
+            sessionId: this.sessionId,
+            turnId: event.turnId,
+            tasks: [...this.heldTasks],
+          });
+          return;
+        }
+        this.settle(run, reason);
         // The engine runs a steered message as the turn after this one.
         this.promoteQueued();
         return;
@@ -597,7 +677,7 @@ export class SessionBridge {
       }
       case 'event.session.status_changed': {
         const run = this.run;
-        if (event.status === 'idle' && run !== undefined && !run.settled) {
+        if (event.status === 'idle' && run !== undefined && !run.settled && this.heldTasks.size === 0) {
           this.settle(run, 'end_turn');
         }
         return;
@@ -615,12 +695,94 @@ export class SessionBridge {
     if (run.settled) return;
     run.settled = true;
     if (this.run === run) this.run = undefined;
+    this.clearDeferred();
+    this.heldTasks.clear();
     this.assistant.flushNow();
     this.thought.flushNow();
     void this.outbox.drain().then(() => {
       run.resolve(reason);
     });
     void this.suggestNextPrompt();
+  }
+
+  /**
+   * A tool call outlived its turn as a background task (`background.task.*`).
+   *
+   * `background.task.started` is the engine's own statement that the work
+   * continues after the tool call returned: either the model asked for it
+   * (`run_in_background`, so it deliberately gave the turn back) or the
+   * command hit its timeout and was moved to background instead of being
+   * killed. The second is still the user's work, and the engine opens a new
+   * turn when it finishes — so the run stays live, and the client keeps
+   * composing instead of showing an answered prompt over running output.
+   */
+  private handleBackgroundTask(event: Event): void {
+    const agentId = (event as { readonly agentId?: unknown }).agentId;
+    if (typeof agentId === 'string' && agentId !== 'main') return;
+    const info = (event as { readonly info?: BackgroundTaskInfoLike }).info;
+    if (info === undefined) return;
+    const taskId = typeof info.taskId === 'string' ? info.taskId : undefined;
+    if (taskId === undefined) return;
+    const parent = typeof info.parentToolCallId === 'string' ? info.parentToolCallId : undefined;
+    if ((event.type as string) === 'background.task.started') {
+      const run = this.run;
+      if (run === undefined || run.settled) return;
+      // Questions and other bookkeeping tasks are answered inside a live turn.
+      if (info.kind !== 'process' && info.kind !== 'agent') return;
+      if (parent !== undefined && this.backgroundCalls.has(parent)) return;
+      this.heldTasks.add(taskId);
+      // New work after a deferred turn end: the grace timer must not fire.
+      this.cancelDeferredTimer();
+      return;
+    }
+    this.heldTasks.delete(taskId);
+    if (parent !== undefined) this.backgroundCalls.delete(parent);
+    this.settleWhenTasksDone();
+  }
+
+  /** The last held task ended: settle, unless its continuation turn is coming. */
+  private settleWhenTasksDone(): void {
+    const deferred = this.deferred;
+    if (deferred === undefined) return;
+    if (deferred.run.settled || this.run !== deferred.run) {
+      this.clearDeferred();
+      return;
+    }
+    if (this.heldTasks.size > 0 || this.turnActive || this.deferredTimer !== undefined) return;
+    const grace = this.options.followUpGraceMs ?? TASK_FOLLOW_UP_GRACE_MS;
+    this.deferredTimer = setTimeout(() => {
+      this.deferredTimer = undefined;
+      const pending = this.deferred;
+      this.deferred = undefined;
+      if (pending === undefined || pending.run.settled || this.run !== pending.run) return;
+      // A turn that started meanwhile owns the end; `turn.ended` settles it.
+      if (this.heldTasks.size > 0 || this.turnActive) return;
+      this.settle(pending.run, pending.reason);
+      this.promoteQueued();
+    }, grace);
+    this.deferredTimer.unref?.();
+  }
+
+  private clearDeferred(): void {
+    this.deferred = undefined;
+    this.cancelDeferredTimer();
+  }
+
+  private cancelDeferredTimer(): void {
+    if (this.deferredTimer === undefined) return;
+    clearTimeout(this.deferredTimer);
+    this.deferredTimer = undefined;
+  }
+
+  /** Stop a task the cancelled run was waiting on. Detached work has no turn to cancel. */
+  private stopTask(taskId: string): void {
+    void this.options.session.stopBackgroundTask(taskId).catch((error: unknown) => {
+      log.warn('acp: failed to stop a background task', {
+        sessionId: this.sessionId,
+        taskId,
+        error: describe(error),
+      });
+    });
   }
 
   /**
@@ -657,6 +819,8 @@ export class SessionBridge {
     if (run.settled) return;
     run.settled = true;
     if (this.run === run) this.run = undefined;
+    this.clearDeferred();
+    this.heldTasks.clear();
     this.assistant.flushNow();
     this.thought.flushNow();
     void this.outbox.drain().then(() => {

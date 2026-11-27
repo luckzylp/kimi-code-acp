@@ -1891,6 +1891,48 @@ test('a subagents-capable client gets subagent_update and the child stream', asy
 });
 
 
+test('an auto-backgrounded command keeps the prompt open until its result turn', async () => {
+  await withAgent(
+    {
+      script: [
+        {
+          kind: 'tool',
+          id: 'call_slow',
+          name: 'Bash',
+          arguments: JSON.stringify({ command: 'sleep 5; echo LATE_DONE', timeout: 1, description: 'slow build' }),
+        },
+        { kind: 'text', text: 'Moved to the background; waiting for it.' },
+        { kind: 'text', text: 'The command finished: LATE_DONE' },
+      ],
+    },
+    async ({ agent, workDir }) => {
+      await boot(agent);
+      const sessionId = await newSession(agent, workDir);
+      // The timeout moves the foreground command to the background instead of
+      // killing it; the engine reports the result in a turn of its own. The
+      // client must stay composing (one live `session/prompt`) until then.
+      const request = agent.beginRequest(
+        'session/prompt',
+        { sessionId, prompt: [{ type: 'text', text: 'run the slow build' }] },
+        120_000,
+      );
+      await waitFor(() => lastText(agent).includes('Moved to the background'), 'the turn-end text');
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 500));
+      if (!agent.pending.has(request.id)) {
+        throw new Error('the prompt settled while the background command was still running');
+      }
+      await waitFor(() => lastText(agent).includes('The command finished'), 'the result turn', 30_000);
+      const result = await request.promise;
+      if (result.stopReason !== 'end_turn') throw new Error(`stopReason ${JSON.stringify(result)}`);
+      // Inside the run the result turn needs no "the agent continued on its
+      // own" note: the client never saw an idle session.
+      const notes = updates(agent).filter((update) => update.sessionUpdate === 'user_message_chunk');
+      if (notes.length !== 0) throw new Error(`unexpected continuation note: ${JSON.stringify(notes)}`);
+    },
+  );
+});
+
+
 test('a long shell command keeps its full text in the card body', async () => {
   const longDir = '/data/project/OrderProductionCollaborationSystem/packages/backend/src';
   const command = `cd ${longDir} && ls -la`;
