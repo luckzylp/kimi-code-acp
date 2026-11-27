@@ -49,7 +49,7 @@ dependency is the monorepo source at a pinned tag.
 
 ## Boundary: no upstream changes
 
-Every adapter behaviour lives in `packages/kimi-acp`; the pinned kimi-code
+Every adapter behaviour lives in `packages/kimi-code-acp`; the pinned kimi-code
 tree is a build input, never a patch target. `vendor/upstream` is extracted from
 the tag in `upstream.json`, is untracked, and is not a git checkout, so no
 upstream source edit can survive a rebuild. The build copies the adapter into
@@ -71,9 +71,9 @@ the upstream workspace:
 ```
 node scripts/upstream.mjs            # pinned tag → vendor/upstream (gitignored), installed
 node scripts/build.mjs
-  ├─ copy packages/kimi-acp → vendor/upstream/packages/kimi-acp
+  ├─ copy packages/kimi-code-acp → vendor/upstream/packages/kimi-code-acp
   ├─ pnpm install (the workspace links @moonshot-ai/kimi-code-sdk)
-  └─ tsdown → dist/main.mjs, copied back to packages/kimi-acp/dist/
+  └─ tsdown → dist/main.mjs, copied back to packages/kimi-code-acp/dist/
 ```
 
 No patches, no vendored copy of their code in git: the adapter is source, the

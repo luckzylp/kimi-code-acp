@@ -11,7 +11,7 @@
  *
  * The adapter is not linked into that tree: pnpm does not treat a symlinked
  * directory as a workspace package, so `scripts/build.mjs` copies the adapter
- * into `vendor/upstream/packages/kimi-acp` for the duration of a build.
+ * into `vendor/upstream/packages/kimi-code-acp` for the duration of a build.
  *
  * Idempotent: a prepared tree is only re-checked unless `--force` is given.
  *

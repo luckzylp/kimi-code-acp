@@ -3,7 +3,7 @@
  * its dependency (`@moonshot-ai/kimi-code-sdk`) exists. pnpm does not accept a
  * symlinked directory as a workspace package, so the source is copied in:
  *
- *   packages/kimi-acp  →  vendor/upstream/packages/kimi-acp   (disposable)
+ *   packages/kimi-code-acp  →  vendor/upstream/packages/kimi-code-acp   (disposable)
  *
  * The copy is refreshed on every build, and its `dist/` is copied back, so the
  * repository never holds a second copy of the source.
@@ -17,7 +17,7 @@ import { pnpmStoreArgs, runPnpm } from './toolchain.mjs';
 const PACKAGE_ENTRIES = ['package.json', 'tsconfig.json', 'tsdown.config.ts', 'vitest.config.ts', 'src', 'test'];
 
 export function workspaceAdapterDir(repoRoot) {
-  return join(repoRoot, 'vendor', 'upstream', 'packages', 'kimi-acp');
+  return join(repoRoot, 'vendor', 'upstream', 'packages', 'kimi-code-acp');
 }
 
 /**
@@ -25,7 +25,7 @@ export function workspaceAdapterDir(repoRoot) {
  * resolves its dependencies. Returns the copy's directory.
  */
 export function prepareWorkspaceAdapter({ repoRoot, upstreamDir, toolchain }) {
-  const source = join(repoRoot, 'packages', 'kimi-acp');
+  const source = join(repoRoot, 'packages', 'kimi-code-acp');
   const target = workspaceAdapterDir(repoRoot);
   rmSync(target, { recursive: true, force: true });
   for (const entry of PACKAGE_ENTRIES) {
@@ -42,7 +42,7 @@ export function prepareWorkspaceAdapter({ repoRoot, upstreamDir, toolchain }) {
 /** Copy the built bundle back into the repository. */
 export function collectBundle({ repoRoot }) {
   const from = join(workspaceAdapterDir(repoRoot), 'dist');
-  const to = join(repoRoot, 'packages', 'kimi-acp', 'dist');
+  const to = join(repoRoot, 'packages', 'kimi-code-acp', 'dist');
   rmSync(to, { recursive: true, force: true });
   cpSync(from, to, { recursive: true });
   const main = join(to, 'main.mjs');

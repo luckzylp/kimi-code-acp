@@ -39,7 +39,7 @@ function argument(name, fallback) {
 
 const target = resolve(argument('--target', defaultTarget));
 const skipBuild = process.argv.includes('--skip-build');
-const ourBundle = join(repoRoot, 'packages', 'kimi-acp', 'dist', 'main.mjs');
+const ourBundle = join(repoRoot, 'packages', 'kimi-code-acp', 'dist', 'main.mjs');
 const packageDir = join(target, 'node_modules', '@moonshot-ai', 'kimi-code');
 const targetBundle = join(packageDir, 'dist', 'main.mjs');
 

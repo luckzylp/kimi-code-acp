@@ -54,8 +54,8 @@ if (tag !== undefined && packageJson !== undefined) {
   );
 }
 
-const sourceDir = join(repoRoot, 'packages', 'kimi-acp', 'src');
-const files = execFileSync('git', ['ls-files', 'packages/kimi-acp/src'], { cwd: repoRoot, encoding: 'utf8' })
+const sourceDir = join(repoRoot, 'packages', 'kimi-code-acp', 'src');
+const files = execFileSync('git', ['ls-files', 'packages/kimi-code-acp/src'], { cwd: repoRoot, encoding: 'utf8' })
   .split('\n')
   .filter((file) => file.length > 0);
 for (const file of files) {

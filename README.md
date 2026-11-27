@@ -15,7 +15,7 @@ functions that already carry eight local patches. See the ADR's alternatives.
 
 ## No upstream patches
 
-The adapter is self-contained in `packages/kimi-acp`. `vendor/upstream` is a
+The adapter is self-contained in `packages/kimi-code-acp`. `vendor/upstream` is a
 disposable copy of the pinned tag (untracked, rebuilt by
 `node scripts/upstream.mjs`) and is never edited; `npm run verify` starts with
 `scripts/check-boundary.mjs`, which fails if vendor/ becomes tracked, drifts
@@ -208,7 +208,7 @@ node scripts/pack.mjs       # tarball + install tree, verified by handshake
 Signing in, once the bundle is installed:
 
 ```sh
-node packages/kimi-acp/dist/main.mjs login   # device-code flow in this terminal
+node packages/kimi-code-acp/dist/main.mjs login   # device-code flow in this terminal
 ```
 
 `npm run verify` runs typecheck, unit tests, build, smoke, e2e and the
@@ -254,7 +254,7 @@ ACP instead of the terminal UI. (2.8.1 publishes as a single self-contained
 package; older pins such as 2.7.3 pulled `qrcode`, `ws`, `chokidar` and their
 transitive tree, which is why the cache layout used to hold ~34 entries.)
 
-Point Zed at the installed bin (or at `packages/kimi-acp/dist/main.mjs`) as a
+Point Zed at the installed bin (or at `packages/kimi-code-acp/dist/main.mjs`) as a
 custom agent command: `node <absolute path>`.
 
 Two SDK surfaces sit behind that one command. v1 speaks
@@ -273,7 +273,7 @@ KIMI_PNPM_STORE_DIR=/path/to/store node scripts/upstream.mjs
 ## Layout
 
 ```
-packages/kimi-acp/       the adapter — the only source in this repository
+packages/kimi-code-acp/       the adapter — the only source in this repository
   src/agent.ts           ACP surface: initialize, session/new, prompt, cancel
   src/session.ts         run model + streaming + outbox
   src/coalesce.ts        text coalescing
@@ -292,7 +292,7 @@ upstream.json            the tag pin
 
 ## How the build works
 
-`packages/kimi-acp` depends on `@moonshot-ai/kimi-code-sdk`, which is
+`packages/kimi-code-acp` depends on `@moonshot-ai/kimi-code-sdk`, which is
 `private: true` in the monorepo and cannot be installed from npm. So the
 adapter is compiled **inside the upstream workspace**, against the tag in
 `upstream.json`:
@@ -300,7 +300,7 @@ adapter is compiled **inside the upstream workspace**, against the tag in
 1. `scripts/upstream.mjs` extracts the tag into `vendor/upstream` (gitignored)
    and installs it with its own lockfile.
 2. `scripts/build.mjs` copies the adapter into
-   `vendor/upstream/packages/kimi-acp` — pnpm does not accept a **symlinked**
+   `vendor/upstream/packages/kimi-code-acp` — pnpm does not accept a **symlinked**
    directory as a workspace package — installs so the workspace links the SDK,
    runs `tsdown`, and copies `dist/` back.
 

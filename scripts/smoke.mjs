@@ -23,7 +23,7 @@ import { spawnAgent } from './lib/acp-client.mjs';
 import { writeFakeHome } from './lib/fake-home.mjs';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const mainPath = join(repoRoot, 'packages', 'kimi-acp', 'dist', 'main.mjs');
+const mainPath = join(repoRoot, 'packages', 'kimi-code-acp', 'dist', 'main.mjs');
 
 function fail(message) {
   process.stderr.write(`[smoke] FAIL ${message}\n`);

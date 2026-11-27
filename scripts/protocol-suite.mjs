@@ -20,7 +20,7 @@ import { writeFakeHome } from './lib/fake-home.mjs';
 import { startFakeProvider } from './lib/fake-provider.mjs';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const mainPath = join(repoRoot, 'packages', 'kimi-acp', 'dist', 'main.mjs');
+const mainPath = join(repoRoot, 'packages', 'kimi-code-acp', 'dist', 'main.mjs');
 const filter = process.argv[2];
 
 const failures = [];

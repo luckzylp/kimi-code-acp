@@ -28,7 +28,7 @@ import { writeFakeHome } from './lib/fake-home.mjs';
 import { configureToolchain } from './toolchain.mjs';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const adapterRoot = join(repoRoot, 'packages', 'kimi-acp');
+const adapterRoot = join(repoRoot, 'packages', 'kimi-code-acp');
 const distMain = join(adapterRoot, 'dist', 'main.mjs');
 const buildDir = join(repoRoot, 'build');
 const stageDir = join(buildDir, 'npm-package');
