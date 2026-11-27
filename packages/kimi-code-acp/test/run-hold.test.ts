@@ -311,6 +311,40 @@ describe('a run and the background work its turn started', () => {
     expect(bridge.isBusy()).toBe(false);
   });
 
+  it('stops the turn of a run cancelled before that turn started', async () => {
+    const { bridge, emit, calls } = bridgeWith();
+    const first = observe(bridge.prompt('do it') as Promise<string>);
+    // The engine cannot cancel a prompt with no active turn, so the answer is
+    // ours to give and the turn is ours to stop once it starts.
+    bridge.cancel();
+    await sleep(5);
+    expect(first.reason).toBe('cancelled');
+    expect(bridge.isBusy()).toBe(false);
+    emit(turnStarted());
+    emit(turnEnded(1, 'cancelled'));
+    await sleep(5);
+    expect(calls.cancel).toBe(2);
+    expect(first.reason).toBe('cancelled');
+    expect(bridge.isBusy()).toBe(false);
+  });
+
+  it('leaves the orphan turn alone when a newer prompt owns the session', async () => {
+    const { bridge, emit, calls } = bridgeWith();
+    const first = observe(bridge.prompt('do it') as Promise<string>);
+    bridge.cancel();
+    await sleep(5);
+    expect(first.reason).toBe('cancelled');
+    // The user sent another prompt before the cancelled one's turn began; the
+    // engine queues it behind that turn, so stopping the turn would abort the
+    // continuation it needs.
+    const second = observe(bridge.prompt('and this') as Promise<string>);
+    emit(turnStarted());
+    expect(calls.cancel).toBe(1);
+    emit(turnEnded());
+    await sleep(5);
+    expect(second.reason).toBe('end_turn');
+  });
+
   it('ignores the tasks of child agents and of a settled run', async () => {
     const { bridge, emit } = bridgeWith();
     const state = observe(bridge.prompt('do it') as Promise<string>);

@@ -520,8 +520,11 @@ async function loadSession(state: AgentState, params: LoadSessionRequest): Promi
     entry.bridge.trackUserMessage(messageId, { announce: true });
   }
   await entry.bridge.flush();
+  // The stored title is published as the client's — unless it is only the
+  // engine's prompt-derived placeholder, which `keepExistingTitle` also
+  // refuses to keep (see `isPublishableTitle`).
   const title = session.summary?.title;
-  if (typeof title === 'string' && title.length > 0) {
+  if (typeof title === 'string' && title.length > 0 && session.summary?.titleKind !== 'replaceable') {
     await entry.bridge.publishSessionInfo(title);
   }
   const { configOptions, modes } = await surface(state, session);
@@ -1117,11 +1120,16 @@ async function matchSkill(
  * A session restored from disk already has a title, and it is the title of the
  * conversation as a whole — not of the message the user happens to send next.
  * Marking the entry titled keeps the first prompt of a restored session from
- * renaming it.
+ * renaming it. The engine's `replaceable` kind is its prompt-derived
+ * placeholder (a first turn that was cancelled or failed never got a real
+ * one), and that still deserves a generated title on the next completed turn.
  */
 function keepExistingTitle(entry: SessionEntry): void {
-  const title = entry.session.summary?.title;
-  if (typeof title === 'string' && title.trim().length > 0) entry.titled = true;
+  const summary = entry.session.summary;
+  const title = summary?.title;
+  if (typeof title === 'string' && title.trim().length > 0 && summary?.titleKind !== 'replaceable') {
+    entry.titled = true;
+  }
 }
 
 /**

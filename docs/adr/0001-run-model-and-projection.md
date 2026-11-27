@@ -154,7 +154,9 @@ Rules:
    all** is settled the same way: a steered prompt waiting for the turn the
    cancel just stopped, or a prompt still being submitted. No event would ever
    answer those, and an unanswered `session/prompt` leaves the client's
-   composer busy, so the session looks stopped.
+   composer busy, so the session looks stopped. A prompt cancelled before its
+   turn started is answered at once and its turn is stopped when it does start
+   (`stopNextTurn`), unless a newer prompt owns the session by then.
 6. A prompt that arrives mid-run is **queued, never rejected**. Engine 2.8's
    `session.steer()` emits `prompt.queued`, ends the running turn at the step
    boundary (reported `completed`) and runs the message as the **next turn**;
@@ -297,7 +299,7 @@ The chain was re-validated on 2026-11-26 against `@moonshot-ai/kimi-code@2.8.1`
 | goal / subagent cards | `node scripts/test.mjs` | unit tests cover card ids, lifecycle status mapping, budget text, subagent states |
 | wire contract | `node scripts/test.mjs` | every v1/v2 update, config option and handshake the adapter emits parses with the ACP SDK's zod schemas |
 | goal extension | `node scripts/e2e.mjs` | `_session/goal set` opens the goal card, `/goal status` reads it, `_session/goal clear` closes it |
-| protocol suite | `node scripts/protocol-suite.mjs` | 91 cases: handshake, lifecycle (new/load/resume/fork/delete/close), prompts, cancel/steering, permission kinds, terminals, declared + hosted MCP (including a failing server), goal, cursors + rewind (including a reload after rewind), concurrent sessions, workspace skills, structured notices, compaction shapes, AIR meta/goal/rename, provider mutations, modes auto/yolo/default via set_mode, thinking option, /tower, logout, the remaining TUI-parity commands (normal + failing), v2 lifecycle/steering/goal and its errors, malformed JSON-RPC frames, custom API keys, session titles (AI + fallback), native subagent sessions, AIR session index, long shell command cards, a run held open by an auto-backgrounded command, a prompt steered into that held run |
+| protocol suite | `node scripts/protocol-suite.mjs` | 92 cases: handshake, lifecycle (new/load/resume/fork/delete/close), prompts, cancel/steering, permission kinds, terminals, declared + hosted MCP (including a failing server), goal, cursors + rewind (including a reload after rewind), concurrent sessions, workspace skills, structured notices, compaction shapes, AIR meta/goal/rename, provider mutations, modes auto/yolo/default via set_mode, thinking option, /tower, logout, the remaining TUI-parity commands (normal + failing), v2 lifecycle/steering/goal and its errors, malformed JSON-RPC frames, custom API keys, session titles (AI + fallback), native subagent sessions, AIR session index, long shell command cards, a run held open by an auto-backgrounded command, a prompt steered into that held run |
 | protocol cancel | `node scripts/e2e.mjs` | `$/cancel_request` cancels the prompt it names |
 | replay plan | `node scripts/e2e.mjs` | `session/load` restores the plan from the TodoList call in history |
 | install tree | `node scripts/pack.mjs` | 2.6 MB tarball, installed `node_modules` + lockfile, handshake from the installed copy |

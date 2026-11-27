@@ -179,6 +179,8 @@ export class SessionBridge {
   /** A turn ended while held tasks run; settle once they are gone. */
   private deferred: DeferredSettlement | undefined;
   private deferredTimer: ReturnType<typeof setTimeout> | undefined;
+  /** A cancel settled a run before its turn started; stop that turn when it does. */
+  private stopNextTurn = false;
 
   constructor(private readonly options: SessionBridgeOptions) {
     this.outbox = new Outbox((notification) => options.send(notification as SessionNotification));
@@ -449,7 +451,10 @@ export class SessionBridge {
     // alone it would hold its `session/prompt` open forever, so the client's
     // composer stays busy and the session looks stopped. Settle those here.
     const run = this.run;
-    if (run !== undefined && !run.settled && !this.turnActive) this.settle(run, 'cancelled');
+    if (run !== undefined && !run.settled && !this.turnActive) {
+      this.stopNextTurn = true;
+      this.settle(run, 'cancelled');
+    }
     for (const queued of this.queuedRuns.splice(0)) {
       if (!queued.settled) this.settle(queued, 'cancelled');
     }
@@ -464,6 +469,7 @@ export class SessionBridge {
     await this.outbox.drain();
     this.clearDeferred();
     this.heldTasks.clear();
+    this.stopNextTurn = false;
     const run = this.run;
     if (run !== undefined && !run.settled) this.settle(run, 'cancelled');
     for (const queued of this.queuedRuns.splice(0)) {
@@ -524,6 +530,19 @@ export class SessionBridge {
         // A turn that started after a task ended owns the next stretch of work;
         // the grace timer must not settle the run behind its back.
         this.cancelDeferredTimer();
+        if (this.stopNextTurn) {
+          this.stopNextTurn = false;
+          // The run this turn was submitted for was cancelled before the turn
+          // started, and the engine cannot cancel a prompt with no active turn.
+          // Stop it now, unless a newer prompt owns the session: the engine
+          // queues that prompt behind this turn, and cancelling would abort
+          // the continuation it needs.
+          if (this.run === undefined) {
+            void this.options.session.cancel().catch((error: unknown) => {
+              log.warn('acp: cancel failed', { sessionId: this.sessionId, error: describe(error) });
+            });
+          }
+        }
         this.messageId = undefined;
         if (this.run === undefined || this.run.settled) {
           // Nobody prompted this turn: say what set the agent off (Decision 2, rule 2).

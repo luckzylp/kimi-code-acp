@@ -1721,17 +1721,64 @@ test('auto title generation does not call the model when disabled', async () => 
       if (provider.requests.length !== 1) {
         throw new Error(`expected one model request, got ${provider.requests.length}`);
       }
-      // The engine still publishes its own easy title (the first user line);
-      // what must not happen is an adapter-side model call for a title.
+      // No adapter-side model call for a title, and no title at all: the
+      // engine's own easy title (the first user line) is a placeholder the
+      // adapter never publishes.
       const info = updates(agent).filter((update) => update.sessionUpdate === 'session_info_update');
-      for (const update of info) {
-        if (update.title !== 'please fix the parser bug') {
-          throw new Error(`unexpected title: ${JSON.stringify(update.title)}`);
-        }
-      }
+      if (info.length !== 0) throw new Error(`unexpected title updates: ${JSON.stringify(info)}`);
     },
   );
 });
+
+test('a restored session whose only title is the engine placeholder gets a generated one', async () => {
+  const provider = await startFakeProvider({
+    // The cancelled first turn still consumes an entry; the last one is the title.
+    script: [{ kind: 'text', text: 'cancelled answer' }, { kind: 'text', text: 'second answer' }, { kind: 'text', text: 'Title After Restore' }],
+    delayMs: 1500,
+  });
+  const homeDir = writeFakeHome({ baseUrl: provider.baseUrl, autoSessionTitle: true });
+  const workDir = mkdtempSync(join(tmpdir(), 'kimi-acp-suite-'));
+  const spawn = () => spawnAgent(mainPath, { homeDir, env: { KIMI_ACP_DEBUG: '1' } });
+  let agent = spawn();
+  const firstPrompt = 'a first prompt that is cancelled';
+  try {
+    await boot(agent);
+    const sessionId = await newSession(agent, workDir);
+    // Cancel the first turn before it answers: it never earns a title, so the
+    // engine's placeholder (the first prompt) is all the session has on disk.
+    const cancelled = agent.beginRequest(
+      'session/prompt',
+      { sessionId, prompt: [{ type: 'text', text: firstPrompt }] },
+      60_000,
+    );
+    await waitFor(() => provider.requests.length >= 1, 'the first model request');
+    agent.notify('session/cancel', { sessionId });
+    const first = await cancelled.promise;
+    if (first.stopReason !== 'cancelled') throw new Error(`first stopReason ${JSON.stringify(first)}`);
+    await agent.close();
+
+    // A fresh process restores it: the placeholder is not what the client is
+    // shown, and the next completed turn still earns a generated title.
+    agent = spawn();
+    await boot(agent);
+    await agent.request('session/load', { sessionId, cwd: workDir, mcpServers: [] });
+    const loaded = updates(agent).filter((update) => update.sessionUpdate === 'session_info_update');
+    if (loaded.some((update) => update.title === firstPrompt)) {
+      throw new Error(`the placeholder was published on load: ${JSON.stringify(loaded)}`);
+    }
+    await prompt(agent, sessionId, 'and the second prompt');
+    await waitFor(
+      () => updates(agent).some((update) => update.sessionUpdate === 'session_info_update' && update.title === 'Title After Restore'),
+      'the generated title after restore',
+    );
+  } finally {
+    await agent.close();
+    await provider.close();
+    rmSync(homeDir, { recursive: true, force: true });
+    rmSync(workDir, { recursive: true, force: true });
+  }
+});
+
 
 test('a failed title request falls back to the first user line', async () => {
   await withAgent(

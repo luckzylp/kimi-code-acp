@@ -138,8 +138,10 @@ for registry agents, or AIR moving to v2). Checklist:
   prompt (a `session.meta.updated` placeholder carrying `lastPrompt`); the
   adapter does not publish that, so a thread is never named after the user's
   first message. The title comes from the session's own model after the first
-  turn, and a session restored with a title keeps it — the next prompt of a
-  restored conversation does not rename it.
+  turn, and a session restored with a real title (`titleKind` `custom` or
+  `generated`) keeps it — the next prompt of a restored conversation does not
+  rename it. One restored with only the placeholder (`replaceable`, e.g. a
+  first turn that was cancelled) still earns a generated title.
 - **Projections for activity ACP has no entity for** (`src/activity.ts`):
   goals (`goal:<id>`), subagents (`subagent:<id>`), compaction notices.
 - **Replay rules** (`src/replay.ts`): injected reminders stripped, TodoList
