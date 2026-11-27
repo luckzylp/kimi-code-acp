@@ -140,13 +140,13 @@ v1 and v2 update the adapter can emit is parsed by the ACP SDK's own zod
 schemas, so a shape drift fails the build instead of a client.
 
 `npm run test:protocol` runs **one case per client-visible behaviour** —
-handshake capabilities, session lifecycle (new/list/load/fork/delete/close),
+handshake capabilities, session lifecycle (new/list/load/resume/fork/delete/close),
 prompts (text/image/resource/cancel/steering), permissions (approve, approve
 for session, reject, cancel-in-dialog), shadow terminals, declared and
 client-hosted MCP servers, goal control, config options and modes, reload after a rewind, concurrent
-sessions, every
+sessions, workspace skills, every
 supported TUI command with normal and failing arguments, and the v2 draft —
-71 cases against a real engine and a fake provider. The expectations come from Zed's client
+75 cases against a real engine and a fake provider. The expectations come from Zed's client
 ([`docs/zed-acp-behavior.md`](docs/zed-acp-behavior.md)), so the suite doubles
 as a record of what the client actually needs.
 

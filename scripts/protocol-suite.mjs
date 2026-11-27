@@ -10,7 +10,7 @@
  *
  *   node scripts/protocol-suite.mjs [filter]
  */
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -54,6 +54,7 @@ async function withAgent(options, body) {
     delayMs: options.delayMs,
   });
   const homeDir = writeFakeHome({ baseUrl: provider.baseUrl });
+  options.setupHome?.(homeDir);
   const workDir = mkdtempSync(join(tmpdir(), 'kimi-acp-suite-'));
   const agent = spawnAgent(mainPath, {
     homeDir,
@@ -1228,6 +1229,108 @@ test('unknown v2 methods are rejected', async () => {
     await boot(agent, { protocolVersion: 2 });
     await agent.request('session/new', { cwd: workDir });
     await expectReject(agent.request('session/explode', {}, 5_000), 'a v2 unknown method');
+  });
+});
+
+// --- skills, resume, status ------------------------------------------------
+
+test('a workspace skill is advertised and invocable', async () => {
+  const marker = 'SUITE-SKILL-BODY-MARKER';
+  await withAgent(
+    {
+      script: [{ kind: 'text', text: 'skill used' }],
+      setupHome: (homeDir) => {
+        const dir = join(homeDir, 'skills', 'suite-skill');
+        mkdirSync(dir, { recursive: true });
+        writeFileSync(
+          join(dir, 'SKILL.md'),
+          `---\nname: suite-skill\ndescription: A skill the suite invokes.\n---\n\n# Suite skill\n\n${marker}\n`,
+        );
+      },
+    },
+    async ({ agent, provider, workDir }) => {
+      await boot(agent);
+      const sessionId = await newSession(agent, workDir);
+      await waitFor(
+        () =>
+          updates(agent).some(
+            (update) =>
+              update.sessionUpdate === 'available_commands_update' &&
+              (update.availableCommands ?? []).some((command) => command.name === 'suite-skill'),
+          ),
+        'the skill command',
+      );
+      const response = await prompt(agent, sessionId, '/suite-skill do the thing', 60_000);
+      if (response.stopReason !== 'end_turn') throw new Error(`stopReason ${response.stopReason}`);
+      const body = provider.requests[0]?.body ?? '';
+      if (!body.includes(marker)) throw new Error('the skill body was not activated');
+    },
+  );
+});
+
+test('session/resume binds without replaying history', async () => {
+  const provider = await startFakeProvider({
+    script: [{ kind: 'text', text: 'first answer' }, { kind: 'text', text: 'resumed answer' }],
+  });
+  const homeDir = writeFakeHome({ baseUrl: provider.baseUrl });
+  const workDir = mkdtempSync(join(tmpdir(), 'kimi-acp-suite-'));
+  let sessionId;
+  const first = spawnAgent(mainPath, { homeDir, env: { KIMI_ACP_DEBUG: '1' } });
+  try {
+    await boot(first);
+    sessionId = await newSession(first, workDir);
+    await prompt(first, sessionId, 'first question');
+  } finally {
+    await first.close();
+  }
+  const second = spawnAgent(mainPath, { homeDir, env: { KIMI_ACP_DEBUG: '1' } });
+  try {
+    await boot(second);
+    await second.request('session/resume', { sessionId, cwd: workDir, mcpServers: [] }, 60_000);
+    const replayed = second
+      .sessionUpdates()
+      .filter((update) => update.sessionUpdate === 'user_message_chunk' || update.sessionUpdate === 'agent_message_chunk')
+      .length;
+    if (replayed !== 0) throw new Error('session/resume replayed history');
+    const response = await prompt(second, sessionId, 'second question');
+    if (response.stopReason !== 'end_turn') throw new Error(`stopReason ${response.stopReason}`);
+    const text = second
+      .sessionUpdates()
+      .filter((update) => update.sessionUpdate === 'agent_message_chunk')
+      .map((update) => update.content?.text ?? '')
+      .join('');
+    if (!text.includes('resumed answer')) throw new Error('the resumed session did not answer');
+  } finally {
+    await second.close();
+    await provider.close();
+    rmSync(homeDir, { recursive: true, force: true });
+    rmSync(workDir, { recursive: true, force: true });
+  }
+});
+
+test('/status reflects plan and swarm modes', async () => {
+  await withAgent({ script: [] }, async ({ agent, workDir }) => {
+    await boot(agent);
+    const sessionId = await newSession(agent, workDir);
+    await agent.request('session/set_mode', { sessionId, modeId: 'plan' });
+    const planned = await runCommand(agent, sessionId, '/status');
+    if (!/Plan mode: on/.test(planned.text)) throw new Error(`/status after plan: ${planned.text}`);
+    await agent.request('session/set_mode', { sessionId, modeId: 'default' });
+    await runCommand(agent, sessionId, '/swarm on');
+    const swarmed = await runCommand(agent, sessionId, '/status');
+    if (!/Swarm mode: on/.test(swarmed.text)) throw new Error(`/status after swarm: ${swarmed.text}`);
+  });
+});
+
+test('/add-dir with a missing path reports a notice', async () => {
+  await withAgent({ script: [] }, async ({ agent, workDir }) => {
+    await boot(agent);
+    const sessionId = await newSession(agent, workDir);
+    const { response, text } = await runCommand(agent, sessionId, '/add-dir /definitely/not/here');
+    if (response.stopReason !== 'end_turn') throw new Error(`stopReason ${response.stopReason}`);
+    if (!/Command failed|not found|does not exist|no such/i.test(text)) {
+      throw new Error(`unexpected answer: ${text.slice(0, 200)}`);
+    }
   });
 });
 // --- runner ----------------------------------------------------------------
