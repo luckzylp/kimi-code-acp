@@ -136,23 +136,35 @@ Rules:
    is excluded: a tool call launched with `run_in_background` (`Bash`, `Agent`)
    handed the turn back to the user on purpose — a dev server or watcher is not
    a wait — so its task does not hold the run.
-4. A cancelled turn settles without waiting for its tasks. `session/cancel` on a
+4. The hold **gives way to a steered prompt**. One run owns the session at a
+   time, and the engine runs a steered message as the next turn whether the
+   turn it interrupted was still active or had already ended into the hold. So
+   a turn ends into the hold only when no steered prompt is waiting, and the
+   `turn.prompt` of a user-prompted turn settles a held run first: it answers
+   with the outcome of the turn it did have, the steered prompt's run takes
+   the next turn, and the command's result turn belongs to whoever is live
+   then, or to nobody (an engine turn with its note, rule 2). The hold belongs
+   to the live run alone: a queued run that fails to submit cannot drop it.
+5. A cancelled turn settles without waiting for its tasks. `session/cancel` on a
    run that is only waiting for those tasks has no live turn to cancel, so it
    stops them (`session.stopBackgroundTask`) and settles `cancelled` itself.
-5. A prompt that arrives mid-run is **queued, never rejected**. Engine 2.8's
+   The engine then reports the stopped task in a turn of its own — the same
+   `task.killed` notification the TUI gets for a user-initiated stop — which
+   the client sees as an engine turn with its note.
+6. A prompt that arrives mid-run is **queued, never rejected**. Engine 2.8's
    `session.steer()` emits `prompt.queued`, ends the running turn at the step
    boundary (reported `completed`) and runs the message as the **next turn**;
    the adapter keeps one run per request (FIFO), promotes the next queued run
    at `turn.ended`/`turn.prompt`, and each `session/prompt` settles with its
-   own turn's outcome. This is the per-request settlement claude-code-acp gets
+   own turn's outcome (rule 4 covers the hold). This is the per-request settlement claude-code-acp gets
    from its turn queue; an earlier revision returned a placeholder
    `end_turn` at once, which marked the message done while the engine was
    still working. `_session/steering` keeps its `injected` answer (the message
    was accepted; its turn streams without an owning request).
-6. `session/cancel` cancels the run: for a goal run it pauses the goal first
+7. `session/cancel` cancels the run: for a goal run it pauses the goal first
    (otherwise the engine relaunches a continuation on the next idle), then
    `session.cancel()`. One `session/prompt`, exactly one response.
-7. Engine `error` / `warning` events become notices, so a failed provider
+8. Engine `error` / `warning` events become notices, so a failed provider
    request cannot leave a prompt silently unanswered.
 
 ## Decision 3 — Executions belong to the agent; the client renders a mirror
@@ -281,7 +293,7 @@ The chain was re-validated on 2026-11-26 against `@moonshot-ai/kimi-code@2.8.1`
 | goal / subagent cards | `node scripts/test.mjs` | unit tests cover card ids, lifecycle status mapping, budget text, subagent states |
 | wire contract | `node scripts/test.mjs` | every v1/v2 update, config option and handshake the adapter emits parses with the ACP SDK's zod schemas |
 | goal extension | `node scripts/e2e.mjs` | `_session/goal set` opens the goal card, `/goal status` reads it, `_session/goal clear` closes it |
-| protocol suite | `node scripts/protocol-suite.mjs` | 90 cases: handshake, lifecycle (new/load/resume/fork/delete/close), prompts, cancel/steering, permission kinds, terminals, declared + hosted MCP (including a failing server), goal, cursors + rewind (including a reload after rewind), concurrent sessions, workspace skills, structured notices, compaction shapes, AIR meta/goal/rename, provider mutations, modes auto/yolo/default via set_mode, thinking option, /tower, logout, the remaining TUI-parity commands (normal + failing), v2 lifecycle/steering/goal and its errors, malformed JSON-RPC frames, custom API keys, session titles (AI + fallback), native subagent sessions, AIR session index, long shell command cards, a run held open by an auto-backgrounded command |
+| protocol suite | `node scripts/protocol-suite.mjs` | 91 cases: handshake, lifecycle (new/load/resume/fork/delete/close), prompts, cancel/steering, permission kinds, terminals, declared + hosted MCP (including a failing server), goal, cursors + rewind (including a reload after rewind), concurrent sessions, workspace skills, structured notices, compaction shapes, AIR meta/goal/rename, provider mutations, modes auto/yolo/default via set_mode, thinking option, /tower, logout, the remaining TUI-parity commands (normal + failing), v2 lifecycle/steering/goal and its errors, malformed JSON-RPC frames, custom API keys, session titles (AI + fallback), native subagent sessions, AIR session index, long shell command cards, a run held open by an auto-backgrounded command, a prompt steered into that held run |
 | protocol cancel | `node scripts/e2e.mjs` | `$/cancel_request` cancels the prompt it names |
 | replay plan | `node scripts/e2e.mjs` | `session/load` restores the plan from the TodoList call in history |
 | install tree | `node scripts/pack.mjs` | 2.6 MB tarball, installed `node_modules` + lockfile, handshake from the installed copy |

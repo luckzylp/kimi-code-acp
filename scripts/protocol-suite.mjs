@@ -1933,6 +1933,59 @@ test('an auto-backgrounded command keeps the prompt open until its result turn',
 });
 
 
+test('a prompt steered while a run is held by an auto-backgrounded command settles with its own turn', async () => {
+  await withAgent(
+    {
+      script: [
+        {
+          kind: 'tool',
+          id: 'call_slow',
+          name: 'Bash',
+          arguments: JSON.stringify({ command: 'sleep 5; echo LATE_DONE', timeout: 1, description: 'slow build' }),
+        },
+        { kind: 'text', text: 'Moved to the background; waiting for it.' },
+        { kind: 'text', text: 'STEERED_ANSWER' },
+        { kind: 'text', text: 'The command finished: LATE_DONE' },
+      ],
+    },
+    async ({ agent, workDir }) => {
+      await boot(agent);
+      const sessionId = await newSession(agent, workDir);
+      const notes = () => updates(agent).filter((update) => update.sessionUpdate === 'user_message_chunk');
+      const first = agent.beginRequest(
+        'session/prompt',
+        { sessionId, prompt: [{ type: 'text', text: 'run the slow build' }] },
+        120_000,
+      );
+      await waitFor(() => lastText(agent).includes('Moved to the background'), 'the turn-end text');
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 500));
+      if (!agent.pending.has(first.id)) {
+        throw new Error('the prompt settled while the background command was still running');
+      }
+      // The client sends a second prompt while the first is held. The engine
+      // runs it as the next turn at once; it must answer with its own turn
+      // (ADR 0001, Decision 2, rule 5), not hang behind the first prompt.
+      const second = agent.beginRequest(
+        'session/prompt',
+        { sessionId, prompt: [{ type: 'text', text: 'and also summarise' }] },
+        30_000,
+      );
+      const steered = await second.promise;
+      if (steered.stopReason !== 'end_turn') throw new Error(`steered stopReason ${JSON.stringify(steered)}`);
+      const result = await first.promise;
+      if (result.stopReason !== 'end_turn') throw new Error(`first stopReason ${JSON.stringify(result)}`);
+      if (!lastText(agent).includes('STEERED_ANSWER')) throw new Error('the steered turn did not stream');
+      // The hold gave way, so the command's result turn belongs to nobody: an
+      // engine turn after both prompts settled, introduced by its one note.
+      if (notes().length !== 0) throw new Error(`a note before the result turn: ${JSON.stringify(notes())}`);
+      await waitFor(() => lastText(agent).includes('The command finished'), 'the result turn', 30_000);
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 300));
+      if (notes().length !== 1) throw new Error(`expected the result turn's note, got ${JSON.stringify(notes())}`);
+    },
+  );
+});
+
+
 test('a long shell command keeps its full text in the card body', async () => {
   const longDir = '/data/project/OrderProductionCollaborationSystem/packages/backend/src';
   const command = `cd ${longDir} && ls -la`;

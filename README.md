@@ -174,9 +174,13 @@ verified end to end.** Present today:
   `/plan`, `/yolo`, `/auto`) are plain text if typed
 - **`terminal_output_delta`**: clients that append chunks get deltas; others get
   `terminal_output`
-- the **run** model: engine 2.8 runs a prompt as one turn (model steps and
-  tool calls are steps inside it), so a prompt settles when its turn ends, with
-  `end_turn` / `cancelled` / `refusal` mapped from the turn's reason
+ - the **run** model: engine 2.8 runs a prompt as one turn (model steps and
+   tool calls are steps inside it), so a prompt settles when its turn ends, with
+   `end_turn` / `cancelled` / `refusal` mapped from the turn's reason — unless
+   a command the turn moved to the background at its timeout is still running:
+   the run then waits for the turn the engine opens with that command's result
+   (a `run_in_background` task never holds it, and a prompt the user steers in
+   meanwhile takes the session, so every prompt still settles with its own turn)
 - coalesced `agent_message_chunk` / `agent_thought_chunk` streaming with one
   `messageId` per message, through a single ordered outbox
 - **tool cards**: title/kind/status, `rawInput`/`rawOutput`, diff content,
@@ -232,7 +236,7 @@ for session, reject, cancel-in-dialog), shadow terminals, declared and
 client-hosted MCP servers, goal control, config options and modes, reload after a rewind, concurrent
 sessions, workspace skills, every
 supported TUI command with normal and failing arguments, and the v2 draft —
-90 cases against a real engine and a fake provider. The expectations come from Zed's client
+91 cases against a real engine and a fake provider. The expectations come from Zed's client
 ([`docs/zed-acp-behavior.md`](docs/zed-acp-behavior.md)), so the suite doubles
 as a record of what the client actually needs.
 

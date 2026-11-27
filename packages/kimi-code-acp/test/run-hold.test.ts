@@ -30,6 +30,7 @@ function fakeSession() {
       };
     },
     prompt: () => Promise.resolve(undefined),
+    steer: () => Promise.resolve(undefined),
     cancel: () => {
       calls.cancel += 1;
       return Promise.resolve();
@@ -48,8 +49,9 @@ function fakeSession() {
   };
 }
 
-function bridgeWith(graceMs = 5) {
+function bridgeWith(graceMs = 5, sessionOverrides: Record<string, unknown> = {}) {
   const fake = fakeSession();
+  Object.assign(fake.session, sessionOverrides);
   const notifications: Array<Record<string, unknown>> = [];
   const bridge = new SessionBridge({
     sessionId: 'session_test',
@@ -99,14 +101,24 @@ function turnEnded(turnId = 1, reason = 'completed') {
   return { type: 'turn.ended', agentId: 'main', turnId, reason };
 }
 
+/** The engine names the prompt behind a turn at its first step (`origin.kind` tells whose it is). */
+function turnPrompt(turnId: number, origin: Record<string, unknown>) {
+  return { type: 'turn.prompt', agentId: 'main', turnId, origin, promptId: `prompt_${turnId}`, input: [] };
+}
+
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** Track a run's settlement without awaiting it. */
 function observe(run: Promise<string>) {
-  const state: { reason?: string } = {};
-  void run.then((reason) => {
-    state.reason = reason;
-  });
+  const state: { reason?: string; error?: unknown } = {};
+  void run.then(
+    (reason) => {
+      state.reason = reason;
+    },
+    (error: unknown) => {
+      state.error = error;
+    },
+  );
   return state;
 }
 
@@ -205,6 +217,82 @@ describe('a run and the background work its turn started', () => {
     emit(turnEnded(1, 'cancelled'));
     await sleep(10);
     expect(state.reason).toBe('cancelled');
+  });
+
+  it('yields the hold to a prompt steered while the run waits, so each prompt settles with its own turn', async () => {
+    const { bridge, emit } = bridgeWith();
+    const command = foregroundCommand();
+    const first = observe(bridge.prompt('do it') as Promise<string>);
+    emit(turnStarted());
+    emit(command.started);
+    emit(command.taskStarted);
+    emit(turnEnded());
+    await sleep(10);
+    expect(first.reason).toBeUndefined();
+    // The user sends a second prompt while the first is held: the engine (idle)
+    // runs it as the next turn at once, and that turn belongs to the second run.
+    const second = observe(bridge.steerAsRun('and this too') as Promise<string>);
+    emit(turnStarted(2, { kind: 'user' }));
+    emit(turnPrompt(2, { kind: 'user' }));
+    await sleep(10);
+    expect(first.reason).toBe('end_turn');
+    expect(second.reason).toBeUndefined();
+    expect(bridge.isBusy()).toBe(true);
+    emit(turnEnded(2));
+    await sleep(10);
+    expect(second.reason).toBe('end_turn');
+    expect(bridge.isBusy()).toBe(false);
+    // The command's result turn now belongs to nobody: an engine turn, not a run.
+    emit(command.taskTerminated);
+    emit(turnStarted(3, { kind: 'task', taskId: 'call_1', status: 'completed' }));
+    emit(turnPrompt(3, { kind: 'task', taskId: 'call_1' }));
+    emit(turnEnded(3));
+    await sleep(10);
+    expect(first.reason).toBe('end_turn');
+    expect(second.reason).toBe('end_turn');
+    expect(bridge.isBusy()).toBe(false);
+  });
+
+  it('does not hold the run behind a prompt steered during its turn', async () => {
+    const { bridge, emit } = bridgeWith();
+    const command = foregroundCommand();
+    const first = observe(bridge.prompt('do it') as Promise<string>);
+    emit(turnStarted());
+    emit(command.started);
+    emit(command.taskStarted);
+    // Steered while the model still works; the engine ends the turn at the step
+    // boundary and runs the message as the next turn.
+    const second = observe(bridge.steerAsRun('and this too') as Promise<string>);
+    emit(turnEnded());
+    await sleep(10);
+    expect(first.reason).toBe('end_turn');
+    expect(second.reason).toBeUndefined();
+    emit(turnStarted(2, { kind: 'user' }));
+    emit(turnPrompt(2, { kind: 'user' }));
+    emit(turnEnded(2));
+    await sleep(10);
+    expect(second.reason).toBe('end_turn');
+    expect(bridge.isBusy()).toBe(false);
+  });
+
+  it('keeps the hold when the steered prompt fails to submit', async () => {
+    const { bridge, emit } = bridgeWith(5, { steer: () => Promise.reject(new Error('session closed')) });
+    const command = foregroundCommand();
+    const first = observe(bridge.prompt('do it') as Promise<string>);
+    emit(turnStarted());
+    emit(command.started);
+    emit(command.taskStarted);
+    emit(turnEnded());
+    await sleep(10);
+    const second = observe(bridge.steerAsRun('and this too') as Promise<string>);
+    await sleep(10);
+    expect(second.error).toBeInstanceOf(Error);
+    expect(first.reason).toBeUndefined();
+    // The first run still waits for its command, and still settles when it ends.
+    emit(command.taskTerminated);
+    await sleep(40);
+    expect(first.reason).toBe('end_turn');
+    expect(bridge.isBusy()).toBe(false);
   });
 
   it('ignores the tasks of child agents and of a settled run', async () => {

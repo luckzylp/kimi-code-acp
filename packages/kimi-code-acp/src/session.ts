@@ -12,7 +12,11 @@
  *
  * The one exception is deliberate backgrounding: a tool call that the model
  * launched with `run_in_background` returned control to the user on purpose
- * (a dev server, a watcher), so it does not hold the run open.
+ * (a dev server, a watcher), so it does not hold the run open. And the hold
+ * itself gives way: a prompt the user steers in while the run waits takes the
+ * session (FIFO, one run at a time), so the held run settles with its own
+ * turn's outcome and the command's result turn belongs to whoever is live
+ * then, or to nobody (an engine turn with its note).
  *
  * Every update goes through one ordered outbox; a run's response is only
  * answered after the outbox has drained, so the client never sees the answer
@@ -209,6 +213,23 @@ export class SessionBridge {
         this.fail(run, error);
       });
     });
+  }
+
+  /** Whether a steered prompt is still waiting for its turn. */
+  private hasQueuedRun(): boolean {
+    return this.queuedRuns.some((run) => !run.settled);
+  }
+
+  /**
+   * A run held for background work steps aside for a steered prompt: the
+   * engine runs that prompt as the next turn, and the turn must be its own.
+   * The held run settles with the outcome of the turn it did have.
+   */
+  private yieldHoldToQueued(originKind: string | undefined): void {
+    if (originKind !== undefined && originKind !== 'user') return;
+    const deferred = this.deferred;
+    if (deferred === undefined || !this.hasQueuedRun()) return;
+    this.settle(deferred.run, deferred.reason);
   }
 
   /** Hand the session to the first steered prompt once no run owns it. */
@@ -446,13 +467,15 @@ export class SessionBridge {
     // union does not list it, but the engine emits it (and it carries the id a
     // cursor needs).
     if ((event.type as string) === 'turn.prompt') {
-      // A turn the engine starts for a steered prompt belongs to that prompt's run.
-      this.promoteQueued();
       const prompt = event as unknown as {
         readonly origin?: { readonly kind?: string; readonly trigger?: string };
         readonly trigger?: string;
         readonly promptId?: string;
       };
+      // A turn the engine starts for a steered prompt belongs to that prompt's
+      // run; a run still held for background work steps aside for it.
+      this.yieldHoldToQueued(prompt.origin?.kind);
+      this.promoteQueued();
       // The same prompts the engine counts as undo anchors (its turnUndo.ts),
       // so a rewind drops exactly what the client was shown a cursor for.
       if (isUndoAnchor(prompt.origin, prompt.trigger)) {
@@ -540,9 +563,10 @@ export class SessionBridge {
         // backgrounded (its timeout moved it to background) keeps the run
         // alive: the engine reports it from the turn it starts on completion,
         // and until then the client must stay busy rather than think the
-        // request is answered while its output is still arriving.
+        // request is answered while its output is still arriving. A steered
+        // prompt waiting for its turn takes precedence: it is the next turn.
         const reason = turnStopReason(event.reason, event.error);
-        if (reason !== 'cancelled' && this.heldTasks.size > 0) {
+        if (reason !== 'cancelled' && this.heldTasks.size > 0 && !this.hasQueuedRun()) {
           this.deferred = { run, reason };
           log.info('acp: run waits for background work', {
             sessionId: this.sessionId,
@@ -688,15 +712,24 @@ export class SessionBridge {
   }
 
   /**
+   * The hold (deferred settlement and the tasks it waits on) belongs to the
+   * live run only; a queued run that settles must not drop it.
+   */
+  private release(run: Run): void {
+    if (this.run !== run) return;
+    this.run = undefined;
+    this.clearDeferred();
+    this.heldTasks.clear();
+  }
+
+  /**
    * Retire the run exactly once. The response waits for the outbox so the
    * client renders the turns' output before the prompt looks answered.
    */
   private settle(run: Run, reason: StopReason): void {
     if (run.settled) return;
     run.settled = true;
-    if (this.run === run) this.run = undefined;
-    this.clearDeferred();
-    this.heldTasks.clear();
+    this.release(run);
     this.assistant.flushNow();
     this.thought.flushNow();
     void this.outbox.drain().then(() => {
@@ -818,9 +851,7 @@ export class SessionBridge {
   private fail(run: Run, error: unknown): void {
     if (run.settled) return;
     run.settled = true;
-    if (this.run === run) this.run = undefined;
-    this.clearDeferred();
-    this.heldTasks.clear();
+    this.release(run);
     this.assistant.flushNow();
     this.thought.flushNow();
     void this.outbox.drain().then(() => {

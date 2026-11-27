@@ -124,8 +124,11 @@ for registry agents, or AIR moving to v2). Checklist:
 ## Beyond the wire
 
 - **Run model** (ADR Decision 2): a prompt settles when its engine turn ends
-  (2.8 runs a prompt as one turn); engine-started continuations are separate
-  turns and are introduced by a one-line note.
+  (2.8 runs a prompt as one turn), unless a command the engine moved to the
+  background at its timeout is still running: the run then waits for the turn
+  that reports the command's result (`run_in_background` tasks never hold it;
+  a prompt steered in meanwhile takes the session). Engine-started
+  continuations are separate turns and are introduced by a one-line note.
 - **Projections for activity ACP has no entity for** (`src/activity.ts`):
   goals (`goal:<id>`), subagents (`subagent:<id>`), compaction notices.
 - **Replay rules** (`src/replay.ts`): injected reminders stripped, TodoList
