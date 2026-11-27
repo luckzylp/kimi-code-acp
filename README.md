@@ -13,6 +13,23 @@ turns no prompt owns, so goal continuations, swarm members and late background
 notifications run dark. Fixing that inside their file lands in the same
 functions that already carry eight local patches. See the ADR's alternatives.
 
+## Install into Zed
+
+Zed's npx registry keeps kimi-code at
+`~/.local/share/zed/external_agents/registry/npx/kimi-code` (package.json,
+package-lock.json, node_modules). This repository ships a sync script that
+builds the adapter and replaces only that package's entry bundle:
+
+```sh
+npm run sync:zed              # build + install + handshake check
+node scripts/install-zed.mjs --skip-build
+node scripts/install-zed.mjs --target <another npx dir>
+```
+
+The original bundle is kept beside it as `dist/main.mjs.upstream`, so reverting
+is one `cp`. Zed may re-download the registry package on an agent update; run
+the sync again afterwards.
+
 ## Custom API key
 
 The engine takes a fully custom endpoint and key from the environment, and the

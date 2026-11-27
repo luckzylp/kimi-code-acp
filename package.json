@@ -17,6 +17,7 @@
     "verify": "npm run typecheck && npm run test && npm run build && npm run smoke && npm run e2e && npm run test:protocol && npm run pack",
     "pack": "node scripts/pack.mjs",
     "test": "node scripts/test.mjs",
-    "test:protocol": "node scripts/protocol-suite.mjs"
+    "test:protocol": "node scripts/protocol-suite.mjs",
+    "sync:zed": "node scripts/install-zed.mjs"
   }
 }
