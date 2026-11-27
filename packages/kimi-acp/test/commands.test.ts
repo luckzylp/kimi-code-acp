@@ -4,6 +4,7 @@ import {
   availableBuiltinCommands,
   expandPluginBody,
   parseSlashCommand,
+  pluginSlashCommands,
 } from '../src/commands';
 
 describe('parseSlashCommand', () => {
@@ -68,5 +69,30 @@ describe('expandPluginBody', () => {
   it('appends arguments otherwise', () => {
     expect(expandPluginBody('Review the code', 'src/app.ts')).toBe('Review the code\n\nsrc/app.ts');
     expect(expandPluginBody('Review the code', '')).toBe('Review the code');
+  });
+});
+
+
+describe('pluginSlashCommands', () => {
+  it('advertises plugin commands as pluginId:name with their bodies', async () => {
+    const session = {
+      listPluginCommands: async () => [
+        { pluginId: 'my-plugin', name: 'review', description: 'Review it', body: 'BODY $ARGUMENTS', path: '/p/review.md' },
+      ],
+    } as never;
+    const { advertised, bodies } = await pluginSlashCommands(session);
+    expect(advertised).toEqual([{ name: 'my-plugin:review', description: 'Review it' }]);
+    expect(bodies.get('my-plugin:review')).toBe('BODY $ARGUMENTS');
+  });
+
+  it('degrades to no commands when discovery fails', async () => {
+    const session = {
+      listPluginCommands: async () => {
+        throw new Error('unavailable');
+      },
+    } as never;
+    const { advertised, bodies } = await pluginSlashCommands(session);
+    expect(advertised).toEqual([]);
+    expect(bodies.size).toBe(0);
   });
 });

@@ -1580,6 +1580,25 @@ test('v2 session lifecycle, steering and goal', async () => {
     },
   );
 });
+
+// --- transport robustness --------------------------------------------------
+
+test('a malformed JSON-RPC frame is answered and the connection survives', async () => {
+  await withAgent({ script: [{ kind: 'text', text: 'alive' }] }, async ({ agent, workDir }) => {
+    agent.writeRaw('this is not json');
+    await waitFor(() => agent.protocolErrors.length > 0, 'the parse-error response');
+    const parseError = agent.protocolErrors[0];
+    if (parseError.code !== -32700) throw new Error(`unexpected code ${parseError.code}`);
+    await boot(agent);
+    const sessionId = await newSession(agent, workDir);
+    const response = await prompt(agent, sessionId, 'hello');
+    if (response.stopReason !== 'end_turn') throw new Error(`stopReason ${response.stopReason}`);
+    if (!lastText(agent).includes('alive')) throw new Error('the session did not answer after a parse error');
+  });
+});
+
+// --- plugin commands -------------------------------------------------------
+
 // --- runner ----------------------------------------------------------------
 
 for (const { name, run } of cases) {

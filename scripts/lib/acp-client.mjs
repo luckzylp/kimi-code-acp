@@ -11,6 +11,8 @@ export class AcpChild {
     this.nextId = 1;
     this.pending = new Map();
     this.notifications = [];
+    /** JSON-RPC errors with a null id (parse errors, invalid requests). */
+    this.protocolErrors = [];
     /** Requests the agent sent to us (permission, elicitation, fs, terminal). */
     this.requests = [];
     this.handlers = new Map();
@@ -36,6 +38,10 @@ export class AcpChild {
       const message = JSON.parse(line);
       if (message.method !== undefined && message.id === undefined) {
         this.notifications.push(message);
+        continue;
+      }
+      if (message.method === undefined && message.id === null && message.error !== undefined) {
+        this.protocolErrors.push(message.error);
         continue;
       }
       if (message.method !== undefined && message.id !== undefined) {
@@ -90,6 +96,11 @@ export class AcpChild {
 
   request(method, params, timeoutMs = 60_000) {
     return this.beginRequest(method, params, timeoutMs).promise;
+  }
+
+  /** Write a raw line, for protocol-error probes. */
+  writeRaw(line) {
+    this.child.stdin.write(`${line}\n`);
   }
 
   notify(method, params) {
