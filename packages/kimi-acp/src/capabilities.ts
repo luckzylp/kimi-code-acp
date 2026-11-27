@@ -6,6 +6,8 @@
  * than any given client implements — Zed 1.29, for example, never sends
  * `terminal/output`'s `exitStatus` even though the spec defines it.
  */
+import { airExtension } from './air-extension';
+
 export interface ClientCapabilities {
   /** `_meta.terminal_output`: renders a terminal from `_meta.terminal_info` + `terminal_output` + `terminal_exit`. */
   readonly terminalOutput: boolean;
@@ -25,6 +27,8 @@ export interface ClientCapabilities {
   readonly notices: boolean;
   /** `session.compaction`: the client renders `compaction_update`. */
   readonly compaction: boolean;
+  /** The client declared itself as JetBrains AIR (`_meta.jetbrains.air`). */
+  readonly air: boolean;
 }
 
 const NONE: ClientCapabilities = {
@@ -37,6 +41,7 @@ const NONE: ClientCapabilities = {
   cursors: false,
   notices: false,
   compaction: false,
+  air: false,
 };
 
 type CapabilitiesCarrier =
@@ -75,6 +80,7 @@ export function readClientCapabilities(capabilities: CapabilitiesCarrier): Clien
     cursors: session?.cursors != null,
     notices: session?.notices != null,
     compaction: session?.compaction != null,
+    air: airExtension(capabilities) !== undefined,
   };
 }
 /**

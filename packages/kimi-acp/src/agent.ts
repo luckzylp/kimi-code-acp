@@ -61,6 +61,14 @@ import {
   type Session as KimiSession,
 } from '@moonshot-ai/kimi-code-sdk';
 
+import {
+  AIR_AGENT_CAPABILITIES,
+  airGoalCapability,
+  airMeta,
+  parseRenameRequest,
+  RENAME_METHOD,
+  type RenameRequest,
+} from './air-extension';
 import { LOGIN_METHOD_ID, terminalAuthMethod } from './auth';
 import { readClientCapabilities, type ClientCapabilities } from './capabilities';
 import {
@@ -180,6 +188,7 @@ export function createAgentApp(
     .onRequest(STEER_METHOD, parseSteerRequest, (context) => steerRequest(state, context.params))
     .onRequest(GOAL_METHOD, parseGoalRequest, (context) => goalRequest(state, context.params))
     .onRequest(REWIND_METHOD, parseRewindRequest, (context) => rewindRequest(state, context.params))
+    .onRequest(RENAME_METHOD, parseRenameRequest, (context) => renameRequest(state, context.params))
     .onRequest('session/set_config_option', (context) => setConfigOption(state, context.params))
     .onRequest('session/prompt', (context) => prompt(state, context.params, context.signal))
     .onNotification('session/cancel', (context) => {
@@ -195,11 +204,15 @@ function initialize(state: AgentState, params: InitializeRequest): InitializeRes
     protocolVersion: params.protocolVersion,
     clientCapabilities: state.capabilities,
   });
-  return initializeResponse();
+  return initializeResponse(state.capabilities);
 }
 
 /** The v1 handshake payload, exported so contract tests can validate it. */
-export function initializeResponse(): InitializeResponse {
+export function initializeResponse(capabilities?: ClientCapabilities): InitializeResponse {
+  const air =
+    capabilities?.air === true
+      ? airMeta({ capabilities: [...AIR_AGENT_CAPABILITIES], goal: airGoalCapability() })
+      : {};
   return {
     protocolVersion: PROTOCOL_VERSION,
     agentCapabilities: {
@@ -212,7 +225,7 @@ export function initializeResponse(): InitializeResponse {
     },
     authMethods: [terminalAuthMethod()],
     // The ACP steering extension: a client may inject into the running turn.
-    _meta: { ...STEERING_CAPABILITY },
+    _meta: { ...STEERING_CAPABILITY, ...air },
   };
 }
 
@@ -385,6 +398,7 @@ async function registerSession(state: AgentState, session: KimiSession): Promise
     cursors: state.capabilities.cursors,
     notices: state.capabilities.notices || v2 !== undefined,
     compaction: state.capabilities.compaction,
+    air: state.capabilities.air,
     send: async (notification) => {
       if (client !== undefined) {
         await client.notify(methods.client.session.update, notification);
@@ -628,6 +642,20 @@ export async function steerRequest(state: AgentState, params: SteerRequest): Pro
  * `_session/rewind`: drop the user message a cursor lies before, and
  * everything after it, by undoing one engine turn per dropped message.
  */
+/** `_session/rename`: set a session title (AIR session index extension). */
+export async function renameRequest(
+  state: AgentState,
+  params: RenameRequest,
+): Promise<Record<string, never>> {
+  const entry = state.sessions.get(params.sessionId);
+  if (entry === undefined) throw RequestError.invalidParams(undefined, 'unknown session');
+  await harnessOf(state).then((harness) =>
+    harness.renameSession({ id: params.sessionId, title: params.title }),
+  );
+  log.info('acp: session renamed', { sessionId: params.sessionId, title: params.title });
+  return {};
+}
+
 export async function rewindRequest(
   state: AgentState,
   params: RewindRequest,
@@ -657,11 +685,12 @@ export async function goalRequest(state: AgentState, params: GoalRequest): Promi
   } else {
     const snapshot = await entry.session.cancelGoal();
     // The engine clears the goal without an observable `goal.updated`, so the
-    // card is closed here.
+    // card and the AIR goal payload are closed here.
     await entry.bridge.clearGoalCard(
       entry.bridge.currentGoalId() ?? snapshot.goalId,
       'Goal cancelled.',
     );
+    await entry.bridge.publishAirGoal(null);
   }
   return {};
 }

@@ -1333,6 +1333,92 @@ test('/add-dir with a missing path reports a notice', async () => {
     }
   });
 });
+
+// --- AIR extensions --------------------------------------------------------
+
+function airCapabilities(capabilities = ['sessionIndex', 'sessionRename', 'goal']) {
+  const caps = zedCapabilities();
+  caps._meta = { ...caps._meta, jetbrains: { air: { version: 1, capabilities } } };
+  return caps;
+}
+
+test('AIR clients get the AIR capability meta, others do not', async () => {
+  await withAgent({ script: [] }, async ({ agent }) => {
+    const air = await agent.request('initialize', {
+      protocolVersion: 1,
+      clientCapabilities: airCapabilities(),
+    });
+    const ext = air._meta?.jetbrains?.air;
+    if (ext === undefined) throw new Error('no jetbrains.air meta in the response');
+    if (ext.version !== 1) throw new Error(`AIR version ${ext.version}`);
+    if (!(ext.capabilities ?? []).includes('sessionRename')) {
+      throw new Error(`AIR capabilities: ${JSON.stringify(ext.capabilities)}`);
+    }
+    if (!(ext.goal?.actions ?? []).includes('set')) throw new Error('goal actions are not advertised');
+  });
+});
+
+test('non-AIR clients get no AIR meta', async () => {
+  await withAgent({ script: [] }, async ({ agent }) => {
+    const init = await agent.request('initialize', {
+      protocolVersion: 1,
+      clientCapabilities: zedCapabilities(),
+    });
+    if (init._meta?.jetbrains !== undefined) throw new Error('AIR meta leaked to a non-AIR client');
+  });
+});
+
+test('_session/rename sets the title', async () => {
+  await withAgent({ script: [] }, async ({ agent, workDir }) => {
+    await boot(agent, { capabilities: airCapabilities() });
+    const sessionId = await newSession(agent, workDir);
+    await agent.request('_session/rename', { sessionId, title: 'Renamed by AIR' }, 10_000);
+    await waitFor(
+      () =>
+        updates(agent).some(
+          (update) => update.sessionUpdate === 'session_info_update' && update.title === 'Renamed by AIR',
+        ),
+      'the title update',
+    );
+    const listed = await agent.request('session/list', {});
+    const entry = listed.sessions.find((session) => session.sessionId === sessionId);
+    if (entry?.title !== 'Renamed by AIR') throw new Error(`session/list title: ${JSON.stringify(entry?.title)}`);
+    await expectReject(
+      agent.request('_session/rename', { sessionId, title: '   ' }, 5_000),
+      'an empty rename title',
+    );
+  });
+});
+
+test('AIR goal updates carry the goal payload', async () => {
+  await withAgent(
+    { script: [{ kind: 'text', text: 'goal continued' }] },
+    async ({ agent, workDir }) => {
+      await boot(agent, { capabilities: airCapabilities() });
+      const sessionId = await newSession(agent, workDir);
+      await agent.request('_session/goal', { sessionId, action: 'set', objective: 'air objective' });
+      await waitFor(
+        () =>
+          updates(agent).some(
+            (update) =>
+              update.sessionUpdate === 'session_info_update' &&
+              update._meta?.jetbrains?.air?.goal?.objective === 'air objective',
+          ),
+        'the AIR goal payload',
+      );
+      await agent.request('_session/goal', { sessionId, action: 'clear' });
+      await waitFor(
+        () =>
+          updates(agent).some(
+            (update) =>
+              update.sessionUpdate === 'session_info_update' &&
+              update._meta?.jetbrains?.air?.goal === null,
+          ),
+        'the cleared AIR goal payload',
+      );
+    },
+  );
+});
 // --- runner ----------------------------------------------------------------
 
 for (const { name, run } of cases) {

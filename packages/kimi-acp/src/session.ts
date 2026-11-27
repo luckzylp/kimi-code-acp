@@ -39,6 +39,7 @@ import { TextCoalescer } from './coalesce';
 import { describeEngineTurn } from './engine-turn';
 import { log } from './log';
 import { Outbox } from './outbox';
+import { airMeta } from './air-extension';
 import { cursorUpdate, liveCursorUpdate, messageIdOfCursor, type CursorEntity } from './rewind';
 import { acpToolCallId, ToolCalls } from './tool-calls';
 
@@ -80,6 +81,8 @@ export interface SessionBridgeOptions {
   readonly notices?: boolean;
   /** The client renders `compaction_update` (`session.compaction`). */
   readonly compaction?: boolean;
+  /** The client is JetBrains AIR and takes the `jetbrains.air` payloads. */
+  readonly air?: boolean;
   readonly send: (notification: SessionNotification) => Promise<void> | void;
 }
 
@@ -141,6 +144,18 @@ export class SessionBridge {
   /** Inject a message into the running turn (ACP `_session/steering`). */
   async steer(parts: readonly PromptPart[]): Promise<void> {
     await this.options.session.steer(parts as PromptPart[]);
+  }
+
+  /** Publish the AIR goal payload (the client renders its goal panel from it). */
+  async publishAirGoal(goal: unknown): Promise<void> {
+    if (this.options.air !== true) return;
+    await this.post({
+      sessionId: this.options.sessionId,
+      update: {
+        sessionUpdate: 'session_info_update',
+        _meta: airMeta({ goal }),
+      },
+    });
   }
 
   /** Record a user message and announce a rewind cursor for it. */
@@ -402,8 +417,10 @@ export class SessionBridge {
             void this.outbox.push(goalCleared(this.options.sessionId, this.goalId, 'Goal cleared.'));
             this.goalId = undefined;
           }
+          void this.publishAirGoal(null);
           return;
         }
+        void this.publishAirGoal(snapshot);
         if (this.goalId === snapshot.goalId) {
           void this.outbox.push(goalChange(this.options.sessionId, snapshot));
         } else {

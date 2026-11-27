@@ -76,6 +76,12 @@ verified end to end.** Present today:
   message and everything after it by undoing one engine turn per dropped
   message, returns `{rewound:false,reason:'busy'}` mid-run, and rejects
   unknown cursors
+- **AIR extensions**: a client that declares `_meta.jetbrains.air` gets the AIR
+  capability meta, the goal payload on session info updates
+  (`_meta.jetbrains.air.goal`, cleared with `null`), and `_session/rename`.
+  Archive/unarchive, native subagent sessions and the exact-git-patch diff form
+  are not wired yet (the public SDK exposes no archive mutation, and the other
+  two need child-agent routing / a patch generator).
 - **goal control**: the AIR `_session/goal` extension (`set` / `clear`) drives the
   engine's goal and keeps the goal card in sync with `/goal`
 - **steering**: the `_session/steering` extension injects a follow-up into the
