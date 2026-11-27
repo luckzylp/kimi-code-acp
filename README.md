@@ -13,6 +13,41 @@ turns no prompt owns, so goal continuations, swarm members and late background
 notifications run dark. Fixing that inside their file lands in the same
 functions that already carry eight local patches. See the ADR's alternatives.
 
+## Custom API key
+
+The engine takes a fully custom endpoint and key from the environment, and the
+adapter passes the environment through unchanged:
+
+```sh
+KIMI_MODEL_NAME=my-model \
+KIMI_MODEL_API_KEY=sk-... \
+KIMI_MODEL_BASE_URL=https://api.example.com/v1 \
+KIMI_MODEL_PROVIDER_TYPE=openai \
+KIMI_MODEL_MAX_CONTEXT_SIZE=128000 \
+kimi-acp
+```
+
+This overrides the configured default model for the whole process (the provider
+type may be `openai`, `anthropic`, `kimi`, `google-genai`, `openai_responses`,
+`bedrock` or `vertexai`). The equivalent persistent form is a provider and a
+model alias in `config.toml`:
+
+```toml
+[providers.custom]
+type = "openai"
+baseUrl = "https://api.example.com/v1"
+apiKey = "sk-..."
+
+[models.my-model]
+provider = "custom"
+model = "my-model"
+maxContextSize = 128000
+defaultModel = "my-model"
+```
+
+The protocol suite pins the environment route end to end: the provider receives
+`Authorization: Bearer <key>` on the model request.
+
 ## Status
 
 **M2 — usable ACP agent with sessions and the client's session surface,
@@ -25,6 +60,9 @@ verified end to end.** Present today:
   live turn produces, with injected reminders (`<system-reminder>`,
   `<task-notification>`) stripped and engine-started turns introduced by the
   same one-line note they get live
+- **session titles**: `session/set_title` (and the AIR `_session/rename`),
+  reflected by `session_info_update {title, updatedAt}` and `session/list`;
+  `sessionCapabilities` advertises list/delete/fork/resume/close/title
 - **session surface**: model / thinking / mode config options,
   `session/set_config_option`, `session/set_mode`, skills advertised as slash
   commands, `usage_update` after setup and each turn, and

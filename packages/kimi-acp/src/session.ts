@@ -146,6 +146,16 @@ export class SessionBridge {
     await this.options.session.steer(parts as PromptPart[]);
   }
 
+  /** Publish the session title/updatedAt (the ACP session index metadata). */
+  async publishSessionInfo(title?: string, updatedAt?: string): Promise<void> {
+    const info: Record<string, unknown> = {
+      sessionUpdate: 'session_info_update',
+      ...(title === undefined ? {} : { title }),
+      updatedAt: updatedAt ?? new Date().toISOString(),
+    };
+    await this.post({ sessionId: this.options.sessionId, update: info } as never);
+  }
+
   /** Publish the AIR goal payload (the client renders its goal panel from it). */
   async publishAirGoal(goal: unknown): Promise<void> {
     if (this.options.air !== true) return;
@@ -533,10 +543,7 @@ export class SessionBridge {
       }
       case 'session.meta.updated': {
         if (typeof event.title === 'string' && event.title.length > 0) {
-          void this.outbox.push({
-            sessionId: this.options.sessionId,
-            update: { sessionUpdate: 'session_info_update', title: event.title },
-          });
+          void this.publishSessionInfo(event.title);
         }
         return;
       }

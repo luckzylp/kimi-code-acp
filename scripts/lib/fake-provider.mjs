@@ -23,7 +23,7 @@ export async function startFakeProvider({ script, text = 'Hello, world.', delayM
       body += chunk;
     });
     request.on('end', () => {
-      requests.push({ url: request.url, body });
+      requests.push({ url: request.url, body, headers: request.headers });
       if (!(request.url ?? '').endsWith('/chat/completions')) {
         response.writeHead(404).end();
         return;

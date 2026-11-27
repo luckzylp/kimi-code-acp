@@ -17,10 +17,10 @@ export interface ProviderInfo {
 
 export async function listProviders(harness: KimiHarness): Promise<{ providers: ProviderInfo[] }> {
   const config = (await harness.getConfig()) as unknown as {
-    providers?: Record<string, { baseUrl?: string; protocol?: string }>;
+    providers?: Record<string, { baseUrl?: string; type?: string }>;
   };
   const providers = Object.entries(config.providers ?? {}).map(([providerId, provider]) => {
-    const apiType = provider.protocol ?? 'openai';
+    const apiType = provider.type ?? 'openai';
     return {
       providerId,
       supported: [apiType],

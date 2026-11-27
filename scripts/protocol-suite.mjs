@@ -100,7 +100,7 @@ async function expectReject(promise, what) {
 }
 
 async function boot(agent, { capabilities = zedCapabilities(), protocolVersion = 1, info } = {}) {
-  await agent.request('initialize', {
+  const initialized = await agent.request('initialize', {
     protocolVersion,
     ...(protocolVersion === 2
       ? { info: info ?? { name: 'zed-suite', version: '1.29.3' }, capabilities }
@@ -109,6 +109,7 @@ async function boot(agent, { capabilities = zedCapabilities(), protocolVersion =
   agent.onRequest('session/request_permission', () => ({
     outcome: { outcome: 'selected', optionId: 'approve_once' },
   }));
+  return initialized;
 }
 
 async function newSession(agent, workDir) {
@@ -1599,6 +1600,70 @@ test('a malformed JSON-RPC frame is answered and the connection survives', async
 
 // --- plugin commands -------------------------------------------------------
 
+
+// --- custom API key and session titles -------------------------------------
+
+test('a custom API key from the environment reaches the provider', async () => {
+  const provider = await startFakeProvider({ script: [{ kind: 'text', text: 'env key ok' }] });
+  const homeDir = writeFakeHome({ baseUrl: 'http://127.0.0.1:1/v1', apiKey: 'unused' });
+  const workDir = mkdtempSync(join(tmpdir(), 'kimi-acp-suite-'));
+  const agent = spawnAgent(mainPath, {
+    homeDir,
+    env: {
+      KIMI_MODEL_NAME: 'custom-model',
+      KIMI_MODEL_API_KEY: 'sk-custom-key',
+      KIMI_MODEL_BASE_URL: provider.baseUrl,
+      KIMI_MODEL_PROVIDER_TYPE: 'openai',
+      KIMI_MODEL_MAX_CONTEXT_SIZE: '8192',
+    },
+  });
+  try {
+    await boot(agent);
+    const sessionId = await newSession(agent, workDir);
+    const response = await prompt(agent, sessionId, 'hello with a custom key', 60_000);
+    if (response.stopReason !== 'end_turn') throw new Error(`stopReason ${response.stopReason}`);
+    if (!lastText(agent).includes('env key ok')) throw new Error('the env-model session did not answer');
+    const request = provider.requests[0];
+    if (request === undefined) throw new Error('the provider received no request');
+    if (request.headers?.authorization !== 'Bearer sk-custom-key') {
+      throw new Error(`authorization header: ${JSON.stringify(request.headers?.authorization)}`);
+    }
+  } finally {
+    await agent.close();
+    await provider.close();
+    rmSync(homeDir, { recursive: true, force: true });
+    rmSync(workDir, { recursive: true, force: true });
+  }
+});
+
+test('session/set_title sets the title and emits session info', async () => {
+  await withAgent({ script: [] }, async ({ agent, workDir }) => {
+    const init = await boot(agent);
+    if (init.agentCapabilities?.sessionCapabilities?.title === undefined) {
+      throw new Error('the title capability is not advertised');
+    }
+    const sessionId = await newSession(agent, workDir);
+    const response = await agent.request('session/set_title', { sessionId, title: '  My Title  ' });
+    if (response.title !== 'My Title') throw new Error(`returned title ${JSON.stringify(response.title)}`);
+    await waitFor(
+      () =>
+        updates(agent).some(
+          (update) =>
+            update.sessionUpdate === 'session_info_update' &&
+            update.title === 'My Title' &&
+            typeof update.updatedAt === 'string',
+        ),
+      'the session_info_update',
+    );
+    const listed = await agent.request('session/list', {});
+    const entry = listed.sessions.find((session) => session.sessionId === sessionId);
+    if (entry?.title !== 'My Title') throw new Error(`session/list title: ${JSON.stringify(entry?.title)}`);
+    await expectReject(
+      agent.request('session/set_title', { sessionId, title: '   ' }, 5_000),
+      'an empty title',
+    );
+  });
+});
 // --- runner ----------------------------------------------------------------
 
 for (const { name, run } of cases) {

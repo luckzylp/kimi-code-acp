@@ -16,6 +16,7 @@ export const AIR_META_KEY = 'jetbrains';
 export const AIR_NAMESPACE = 'air';
 export const AIR_VERSION = 1;
 export const RENAME_METHOD = '_session/rename';
+export const SET_TITLE_METHOD = 'session/set_title';
 
 export interface AirExtension {
   readonly version: number;
@@ -71,6 +72,9 @@ export interface RenameRequest {
   readonly sessionId: string;
   readonly title: string;
 }
+
+/** `session/set_title` uses the same params shape. */
+export const parseSetTitleRequest = parseRenameRequest;
 
 export function parseRenameRequest(params: unknown): RenameRequest {
   if (typeof params !== 'object' || params === null) {

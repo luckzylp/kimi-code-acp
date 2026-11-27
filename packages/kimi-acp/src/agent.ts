@@ -66,7 +66,9 @@ import {
   airGoalCapability,
   airMeta,
   parseRenameRequest,
+  parseSetTitleRequest,
   RENAME_METHOD,
+  SET_TITLE_METHOD,
   type RenameRequest,
 } from './air-extension';
 import { LOGIN_METHOD_ID, terminalAuthMethod } from './auth';
@@ -189,6 +191,7 @@ export function createAgentApp(
     .onRequest(GOAL_METHOD, parseGoalRequest, (context) => goalRequest(state, context.params))
     .onRequest(REWIND_METHOD, parseRewindRequest, (context) => rewindRequest(state, context.params))
     .onRequest(RENAME_METHOD, parseRenameRequest, (context) => renameRequest(state, context.params))
+    .onRequest(SET_TITLE_METHOD, parseSetTitleRequest, (context) => setTitleRequest(state, context.params))
     .onRequest('session/set_config_option', (context) => setConfigOption(state, context.params))
     .onRequest('session/prompt', (context) => prompt(state, context.params, context.signal))
     .onNotification('session/cancel', (context) => {
@@ -222,6 +225,16 @@ export function initializeResponse(capabilities?: ClientCapabilities): Initializ
       mcpCapabilities: { http: true, sse: true },
       // providers/list is served read-only; see providers.ts.
       providers: {},
+      // Optional session methods this agent implements, so a client can gate
+      // them: history listing/deletion, fork, resume, close, and titles.
+      sessionCapabilities: {
+        list: {},
+        delete: {},
+        fork: {},
+        resume: {},
+        close: {},
+        title: {},
+      },
     },
     authMethods: [terminalAuthMethod()],
     // The ACP steering extension: a client may inject into the running turn.
@@ -471,6 +484,10 @@ async function loadSession(state: AgentState, params: LoadSessionRequest): Promi
     entry.bridge.trackUserMessage(messageId);
   }
   await entry.bridge.flush();
+  const title = session.summary?.title;
+  if (typeof title === 'string' && title.length > 0) {
+    await entry.bridge.publishSessionInfo(title);
+  }
   const { configOptions, modes } = await surface(state, session);
   scheduleSurfaceUpdates(entry);
   log.info('acp: session loaded', { sessionId: params.sessionId, records: records.length });
@@ -642,6 +659,22 @@ export async function steerRequest(state: AgentState, params: SteerRequest): Pro
  * `_session/rewind`: drop the user message a cursor lies before, and
  * everything after it, by undoing one engine turn per dropped message.
  */
+/** `session/set_title`: the ACP title request; same effect as `_session/rename`. */
+export async function setTitleRequest(
+  state: AgentState,
+  params: { sessionId: string; title: string },
+): Promise<{ title: string }> {
+  const entry = state.sessions.get(params.sessionId);
+  if (entry === undefined) throw RequestError.invalidParams(undefined, 'unknown session');
+  const title = params.title.trim();
+  if (title.length === 0) {
+    throw RequestError.invalidParams(undefined, 'title must not be empty');
+  }
+  await (await harnessOf(state)).renameSession({ id: params.sessionId, title });
+  log.info('acp: session title set', { sessionId: params.sessionId, title });
+  return { title };
+}
+
 /** `_session/rename`: set a session title (AIR session index extension). */
 export async function renameRequest(
   state: AgentState,

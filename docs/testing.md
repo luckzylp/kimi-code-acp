@@ -25,7 +25,7 @@ node scripts/protocol-suite.mjs 'v2'
 The cases are grouped in `scripts/protocol-suite.mjs` by area (handshake,
 session lifecycle, prompt, permissions, terminals, MCP, goal, cursors/rewind,
 notices/compaction, AIR extensions, config/modes, commands, v2, transport
-robustness). Current count: **88 cases**.
+robustness). Current count: **90 cases**.
 
 Expected values are derived from the ACP v1/v2 schemas (the emitted payloads
 are parsed with the SDK's zod schemas in the contract tests) and from Zed
