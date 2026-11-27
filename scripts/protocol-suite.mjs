@@ -1710,6 +1710,35 @@ test('a generated title becomes the session_info_update title', async () => {
   );
 });
 
+test('a title the user sets during the first turn is not overwritten by the generated one', async () => {
+  await withAgent(
+    {
+      script: [{ kind: 'text', text: 'the answer' }, { kind: 'text', text: 'GENERATED OVERWRITE' }],
+      autoSessionTitle: true,
+      delayMs: 1500,
+    },
+    async ({ agent, workDir }) => {
+      await boot(agent);
+      const sessionId = await newSession(agent, workDir);
+      await prompt(agent, sessionId, 'please fix the parser bug');
+      // The title request is still in flight (the fake provider answers slowly),
+      // so this rename lands first.
+      await agent.request('session/set_title', { sessionId, title: 'My Own Title' });
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 4000));
+      const titles = updates(agent)
+        .filter((update) => update.sessionUpdate === 'session_info_update')
+        .map((update) => update.title);
+      if (titles.includes('GENERATED OVERWRITE')) {
+        throw new Error(`the generated title overwrote the user's: ${JSON.stringify(titles)}`);
+      }
+      if (titles.at(-1) !== 'My Own Title') throw new Error(`titles: ${JSON.stringify(titles)}`);
+      const listed = await agent.request('session/list', {});
+      const entry = listed.sessions.find((session) => session.sessionId === sessionId);
+      if (entry?.title !== 'My Own Title') throw new Error(`session/list title: ${JSON.stringify(entry?.title)}`);
+    },
+  );
+});
+
 test('auto title generation does not call the model when disabled', async () => {
   await withAgent(
     { script: [{ kind: 'text', text: 'the answer' }], autoSessionTitle: false },

@@ -141,7 +141,10 @@ for registry agents, or AIR moving to v2). Checklist:
   turn, and a session restored with a real title (`titleKind` `custom` or
   `generated`) keeps it — the next prompt of a restored conversation does not
   rename it. One restored with only the placeholder (`replaceable`, e.g. a
-  first turn that was cancelled) still earns a generated title.
+  first turn that was cancelled) still earns a generated title. Every rename
+  (`/title`, `session/set_title`, `_session/rename`, the generated one) runs
+  under one per-session lock, so a title the user sets while the model is
+  still answering is the last write and always wins.
 - **Projections for activity ACP has no entity for** (`src/activity.ts`):
   goals (`goal:<id>`), subagents (`subagent:<id>`), compaction notices.
 - **Replay rules** (`src/replay.ts`): injected reminders stripped, TodoList

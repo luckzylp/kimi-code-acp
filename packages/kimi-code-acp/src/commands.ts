@@ -20,6 +20,8 @@ export interface CommandRuntime {
   readonly sessionId: string;
   readonly session: KimiSession;
   readonly harness: KimiHarness;
+  /** Rename the session; a title the user chose is final. */
+  readonly setTitle?: ((title: string) => Promise<void>) | undefined;
 }
 
 export interface CommandReply {
@@ -191,7 +193,7 @@ const TITLE: SlashCommandSpec = {
   run: async (runtime, args) => {
     const title = args.trim();
     if (title.length === 0) return { text: 'Usage: /title <title>' };
-    await runtime.harness.renameSession({ id: runtime.sessionId, title });
+    await (runtime.setTitle?.(title) ?? runtime.harness.renameSession({ id: runtime.sessionId, title }));
     return { text: `Renamed to "${title}".` };
   },
 };

@@ -142,6 +142,8 @@ interface SessionEntry {
   readonly session: KimiSession;
   readonly bridge: SessionBridge;
   titleAttempts: number;
+  /** Serializes every rename of this session: the last writer is the user's. */
+  titleLock: Promise<void>;
   titled: boolean;
   /** The first user text, kept for adapter-side title generation. */
   firstUserText?: string;
@@ -461,7 +463,7 @@ async function registerSession(state: AgentState, session: KimiSession): Promise
   });
   wireApprovals(state, bridge, session);
   wireQuestions(state, bridge, session);
-  const entry: SessionEntry = { session, bridge, titleAttempts: 0, titled: false };
+  const entry: SessionEntry = { session, bridge, titleAttempts: 0, titled: false, titleLock: Promise.resolve() };
   state.sessions.set(session.id, entry);
   return entry;
 }
@@ -801,7 +803,12 @@ export async function setTitleRequest(
   if (title.length === 0) {
     throw RequestError.invalidParams(undefined, 'title must not be empty');
   }
-  await (await harnessOf(state)).renameSession({ id: params.sessionId, title });
+  const harness = await harnessOf(state);
+  await withTitleLock(entry, async () => {
+    await harness.renameSession({ id: params.sessionId, title });
+    // A title the user chose is final: the generated one never overwrites it.
+    entry.titled = true;
+  });
   log.info('acp: session title set', { sessionId: params.sessionId, title });
   void notifyListChange(state, params.sessionId);
   return { title };
@@ -814,9 +821,11 @@ export async function renameRequest(
 ): Promise<Record<string, never>> {
   const entry = state.sessions.get(params.sessionId);
   if (entry === undefined) throw RequestError.invalidParams(undefined, 'unknown session');
-  await harnessOf(state).then((harness) =>
-    harness.renameSession({ id: params.sessionId, title: params.title }),
-  );
+  const harness = await harnessOf(state);
+  await withTitleLock(entry, async () => {
+    await harness.renameSession({ id: params.sessionId, title: params.title });
+    entry.titled = true;
+  });
   log.info('acp: session renamed', { sessionId: params.sessionId, title: params.title });
   void notifyListChange(state, params.sessionId);
   return {};
@@ -1018,6 +1027,12 @@ export async function prompt(
     sessionId: entry.session.id,
     session: entry.session,
     harness: await harnessOf(state),
+    setTitle: async (title: string) => {
+      await withTitleLock(entry, async () => {
+        await runtime.harness.renameSession({ id: entry.session.id, title });
+        entry.titled = true;
+      });
+    },
   };
   let parts: readonly PromptPart[] = built.parts;
   const slash = built.text.length === 0 ? null : parseSlashCommand(built.text);
@@ -1117,6 +1132,24 @@ async function matchSkill(
 }
 
 /**
+ * Run `rename` with this session's title lock held, so a title the user sets
+ * while a generated one is being applied is always the last write.
+ */
+async function withTitleLock<T>(entry: SessionEntry, rename: () => Promise<T>): Promise<T> {
+  const previous = entry.titleLock;
+  let release = (): void => undefined;
+  entry.titleLock = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await previous;
+  try {
+    return await rename();
+  } finally {
+    release();
+  }
+}
+
+/**
  * A session restored from disk already has a title, and it is the title of the
  * conversation as a whole — not of the message the user happens to send next.
  * Marking the entry titled keeps the first prompt of a restored session from
@@ -1142,6 +1175,9 @@ function keepExistingTitle(entry: SessionEntry): void {
  */
 async function maybeGenerateTitle(state: AgentState, entry: SessionEntry): Promise<void> {
   if (entry.titled || entry.titleAttempts >= MAX_TITLE_ATTEMPTS) return;
+  // A restored session whose title is the engine's placeholder is untitled for
+  // us; one with a real title keeps it (`keepExistingTitle`).
+  if (entry.session.summary?.titleKind === 'custom') return;
   entry.titleAttempts += 1;
   const sessionId = entry.session.id;
   try {
@@ -1160,8 +1196,14 @@ async function maybeGenerateTitle(state: AgentState, entry: SessionEntry): Promi
     let title = await generateTitle(config, status?.model, entry.firstUserText);
     title ??= fallbackTitle(entry.firstUserText);
     if (title === undefined) return;
-    await harness.renameSession({ id: sessionId, title });
-    entry.titled = true;
+    // The request can take half a minute; a title the user set meanwhile (or a
+    // `/title` in the same window) wins over the generated one, and the lock
+    // puts this rename before any later one.
+    await withTitleLock(entry, async () => {
+      if (entry.titled) return;
+      await harness.renameSession({ id: sessionId, title });
+      entry.titled = true;
+    });
     log.info('acp: session title generated', { sessionId, title });
   } catch (error) {
     log.warn('acp: session title generation failed', {
