@@ -402,27 +402,18 @@ test('a rejected tool fails without running', async () => {
 // --- commands --------------------------------------------------------------
 
 const commandCases = [
-  ['/help lists commands', '/help', (text) => text.includes('/status')],
   ['/status reports the model', '/status', (text) => text.includes('Model:') && text.includes('Permission:')],
   ['/usage answers', '/usage', (text) => text.length > 0],
   ['/goal status without a goal', '/goal status', (text) => /No goal/i.test(text)],
   ['/swarm on enables swarm mode', '/swarm on', (text) => text.includes('Swarm mode on')],
   ['/swarm off disables swarm mode', '/swarm off', (text) => text.includes('Swarm mode off')],
-  ['/permission lists the mode', '/permission', (text) => text.includes('Permission:')],
-  ['/permission switches to plan', '/permission plan', (text) => text.includes('Mode set to plan')],
-  ['/permission rejects unknown modes', '/permission warp', (text) => text.includes('Usage: /permission')],
-  ['/model lists models', '/model', (text) => text.includes('fake')],
-  ['/model sets a model', '/model fake', (text) => text.includes('Model set to fake')],
-  ['/effort reports the level', '/effort', (text) => text.includes('Thinking effort')],
   ['/title sets a title', '/title Suite Title', (text) => text.includes('Suite Title')],
   ['/title without text explains usage', '/title', (text) => text.includes('Usage: /title')],
   ['/add-dir adds a directory', '/add-dir /tmp', (text) => text.includes('Added /tmp')],
   ['/add-dir without a path explains usage', '/add-dir', (text) => text.includes('Usage: /add-dir')],
   ['/tasks lists background tasks', '/tasks', (text) => /background tasks|\[/i.test(text)],
   ['/mcp lists servers', '/mcp', (text) => /MCP server|No MCP/i.test(text)],
-  ['/plugins lists plugins', '/plugins', (text) => /plugin|No plugins/i.test(text)],
   ['/compact reports a refusal as a notice', '/compact', (text) => /Compaction requested|Command failed/i.test(text)],
-  ['/help does not call the model', '/help', () => true],
 ];
 
 for (const [name, command, check] of commandCases) {
@@ -452,15 +443,7 @@ test('/swarm <task> submits the task', async () => {
   });
 });
 
-test('/model with an unknown alias reports a notice', async () => {
-  await withAgent({ script: [] }, async ({ agent, workDir }) => {
-    await boot(agent);
-    const sessionId = await newSession(agent, workDir);
-    const { response, text } = await runCommand(agent, sessionId, '/model no-such-model');
-    if (response.stopReason !== 'end_turn') throw new Error(`stopReason ${response.stopReason}`);
-    if (!/Command failed/i.test(text)) throw new Error(`unexpected answer: ${text.slice(0, 200)}`);
-  });
-});
+
 
 test('/goal pause without a goal reports a notice', async () => {
   await withAgent({ script: [] }, async ({ agent, workDir }) => {
@@ -970,8 +953,6 @@ test('/init and /undo answer without crashing', async () => {
     }
     const undo = await runCommand(agent, sessionId, '/undo 1');
     if (!/undid|command failed/i.test(undo.text)) throw new Error(`/undo answered ${undo.text.slice(0, 120)}`);
-    const logout = await runCommand(agent, sessionId, '/logout');
-    if (!/signed out|command failed/i.test(logout.text)) throw new Error(`/logout answered ${logout.text.slice(0, 120)}`);
   });
 });
 
@@ -1084,7 +1065,7 @@ test('a notices-capable client gets a structured command failure', async () => {
     capabilities.session.notices = {};
     await boot(agent, { capabilities });
     const sessionId = await newSession(agent, workDir);
-    await prompt(agent, sessionId, '/model no-such-model');
+    await prompt(agent, sessionId, '/compact');
     const notice = updates(agent).find((update) => update.sessionUpdate === 'notice');
     if (notice === undefined) throw new Error('no notice update was sent');
     if (notice.severity !== 'warning') throw new Error(`notice severity ${notice.severity}`);
@@ -1103,7 +1084,7 @@ test('a client without notices gets the failure as a message', async () => {
     delete capabilities.session.notices;
     await boot(agent, { capabilities });
     const sessionId = await newSession(agent, workDir);
-    await prompt(agent, sessionId, '/model no-such-model');
+    await prompt(agent, sessionId, '/compact');
     if (updates(agent).some((update) => update.sessionUpdate === 'notice')) {
       throw new Error('a notice was sent to a client that does not render notices');
     }
@@ -1121,7 +1102,7 @@ test('v2 command failures are structured notices', async () => {
     const created = await agent.request('session/new', { cwd: workDir });
     await agent.request(
       'session/prompt',
-      { sessionId: created.sessionId, prompt: [{ type: 'text', text: '/model no-such-model' }] },
+      { sessionId: created.sessionId, prompt: [{ type: 'text', text: '/compact' }] },
       30_000,
     );
     const notice = updates(agent).find((update) => update.sessionUpdate === 'notice');
@@ -1515,18 +1496,7 @@ test('/tower answers with a status or a notice', async () => {
   });
 });
 
-test('/effort reports or sets the level', async () => {
-  await withAgent({ script: [] }, async ({ agent, workDir }) => {
-    await boot(agent);
-    const sessionId = await newSession(agent, workDir);
-    const listed = await runCommand(agent, sessionId, '/effort');
-    if (!/Thinking effort/i.test(listed.text)) throw new Error(`/effort: ${listed.text}`);
-    const set = await runCommand(agent, sessionId, '/effort low');
-    if (!/Thinking effort set to low|Command failed/i.test(set.text)) {
-      throw new Error(`/effort low: ${set.text.slice(0, 200)}`);
-    }
-  });
-});
+
 
 test('an invalid MCP server shape is rejected, a failing server is tolerated', async () => {
   await withAgent({ script: [{ kind: 'text', text: 'still works' }] }, async ({ agent, workDir }) => {
@@ -1784,7 +1754,7 @@ test('a failed title request falls back to the first user line', async () => {
 });
 
 
-test('redundant commands are not advertised but still run', async () => {
+test('dropped commands are neither advertised nor callable', async () => {
   await withAgent({ script: [] }, async ({ agent, workDir }) => {
     await boot(agent);
     const sessionId = await newSession(agent, workDir);
@@ -1804,8 +1774,6 @@ test('redundant commands are not advertised but still run', async () => {
     }
     const addDir = await runCommand(agent, sessionId, '/add-dir /tmp');
     if (!addDir.text.includes('Added /tmp')) throw new Error(`/add-dir still runs? ${addDir.text.slice(0, 120)}`);
-    const models = await runCommand(agent, sessionId, '/model');
-    if (!/fake/.test(models.text)) throw new Error(`/model still runs? ${models.text.slice(0, 120)}`);
   });
 });
 

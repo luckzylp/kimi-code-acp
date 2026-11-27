@@ -38,13 +38,11 @@ describe('advertised commands', () => {
       'compact',
       'status',
       'usage',
-      'permission',
       'title',
       'undo',
       'tasks',
       'mcp',
       'init',
-      'help',
     ]) {
       expect(names).toContain(expected);
     }
@@ -98,10 +96,10 @@ describe('pluginSlashCommands', () => {
 describe('hidden commands', () => {
   it('does not advertise add-dir, model, effort or plugins but still runs them', async () => {
     const names = availableBuiltinCommands().map((command) => command.name);
-    for (const hidden of ['add-dir', 'model', 'effort', 'plugins']) {
+    for (const hidden of ['add-dir']) {
       expect(names).not.toContain(hidden);
     }
-    for (const gone of ['plan', 'yolo', 'auto']) {
+    for (const gone of ['plan', 'yolo', 'auto', 'model', 'effort', 'plugins', 'permission', 'logout', 'help']) {
       expect(names).not.toContain(gone);
       await expect(runBuiltinCommand(gone, '', { sessionId: 's', session: {}, harness: {} } as never)).resolves.toBeNull();
     }

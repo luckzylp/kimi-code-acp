@@ -166,13 +166,12 @@ verified end to end.** Present today:
   arrives mid-run is queued behind the running turn (the engine runs it as the
   next turn) and its response carries that turn's own stop reason — never a
   placeholder
-- **slash commands with TUI parity**: goal (status/pause/resume/cancel/create),
-  swarm, tower, compact, status, usage, permission, title, undo, tasks, mcp,
-  init, logout, help, plus session skills — all answered locally where no model
-  turn is needed. `/model`, `/effort`, `/plugins` and `/add-dir` remain callable
-  but are not advertised (the client has native pickers, or the command is
-  internal); `/plan`, `/yolo`, `/auto` are not commands — modes are set through
-  `session/set_mode` / config options
+- **slash commands unlike the TUI**: only goal (status/pause/resume/cancel/create),
+  swarm, tower, compact, status, usage, title, undo, tasks, mcp, init, plus
+  session skills — the client's pickers own model/effort/mode, `logout` is the
+  ACP request, and `/help`, `/plugins`, `/add-dir` are internal. Removed
+  commands (`/model`, `/effort`, `/plugins`, `/permission`, `/logout`, `/help`,
+  `/plan`, `/yolo`, `/auto`) are plain text if typed
 - **`terminal_output_delta`**: clients that append chunks get deltas; others get
   `terminal_output`
 - the **run** model: engine 2.8 runs a prompt as one turn (model steps and
@@ -233,7 +232,7 @@ for session, reject, cancel-in-dialog), shadow terminals, declared and
 client-hosted MCP servers, goal control, config options and modes, reload after a rewind, concurrent
 sessions, workspace skills, every
 supported TUI command with normal and failing arguments, and the v2 draft —
-100 cases against a real engine and a fake provider. The expectations come from Zed's client
+89 cases against a real engine and a fake provider. The expectations come from Zed's client
 ([`docs/zed-acp-behavior.md`](docs/zed-acp-behavior.md)), so the suite doubles
 as a record of what the client actually needs.
 

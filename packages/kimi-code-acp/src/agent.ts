@@ -1013,7 +1013,6 @@ export async function prompt(
     sessionId: entry.session.id,
     session: entry.session,
     harness: await harnessOf(state),
-    setMode: (mode) => applyModeAndUpdate(state, entry, mode),
   };
   let parts: readonly PromptPart[] = built.parts;
   const slash = built.text.length === 0 ? null : parseSlashCommand(built.text);

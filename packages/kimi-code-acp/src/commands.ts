@@ -14,14 +14,12 @@
 import type { AvailableCommand } from '@agentclientprotocol/sdk/unstable';
 import type { KimiHarness, Session as KimiSession } from '@moonshot-ai/kimi-code-sdk';
 
-import { modelEntries, type AcpModeId } from './config-options';
+
 
 export interface CommandRuntime {
   readonly sessionId: string;
   readonly session: KimiSession;
   readonly harness: KimiHarness;
-  /** Present when the adapter can switch permission/plan modes. */
-  setMode?(mode: AcpModeId): Promise<void>;
 }
 
 export interface CommandReply {
@@ -40,15 +38,7 @@ interface SlashCommandSpec {
   readonly run: (runtime: CommandRuntime, args: string) => Promise<CommandReply>;
 }
 
-const HELP: SlashCommandSpec = {
-  name: 'help',
-  description: 'List the commands this session understands',
-  run: async () => ({
-    text: BUILTIN_COMMANDS.filter((spec) => spec.hidden !== true).map(
-      (spec) => `/${spec.name}${spec.argumentHint === undefined ? '' : ` ${spec.argumentHint}`} — ${spec.description}`,
-    ).join('\n'),
-  }),
-};
+
 
 const STATUS: SlashCommandSpec = {
   name: 'status',
@@ -265,96 +255,18 @@ const MCP: SlashCommandSpec = {
   },
 };
 
-const PLUGINS: SlashCommandSpec = {
-  name: 'plugins',
-  // Available when typed; the client has native pickers for this.
-  hidden: true,
-  description: 'List installed plugins',
-  run: async (runtime) => {
-    const plugins = await runtime.session.listPlugins();
-    const list = (plugins as unknown as readonly unknown[]).map((plugin) => {
-      const record = plugin as Record<string, unknown>;
-      const name = typeof record['name'] === 'string' ? record['name'] : 'plugin';
-      const state = typeof record['state'] === 'string' ? record['state'] : '';
-      return `${name}${state.length === 0 ? '' : ` [${state}]`}`;
-    });
-    return { text: list.length === 0 ? 'No plugins installed.' : list.join('\n') };
-  },
-};
 
-const MODEL: SlashCommandSpec = {
-  name: 'model',
-  // Available when typed; the client has native pickers for this.
-  hidden: true,
-  description: 'Switch the model',
-  argumentHint: '[alias]',
-  run: async (runtime, args) => {
-    const requested = args.trim();
-    const models = modelEntries(await runtime.harness.getConfig());
-    if (requested.length === 0) {
-      return {
-        text: models.length === 0
-          ? 'No models configured.'
-          : `Models: ${models.map((model) => model.id).join(', ')}`,
-      };
-    }
-    await runtime.session.setModel(requested);
-    return { text: `Model set to ${requested}.` };
-  },
-};
 
-const EFFORT: SlashCommandSpec = {
-  name: 'effort',
-  // Available when typed; the client has native pickers for this.
-  hidden: true,
-  description: 'Set the thinking effort',
-  argumentHint: '<off|low|medium|high>',
-  run: async (runtime, args) => {
-    const level = args.trim();
-    if (level.length === 0) {
-      const status = await runtime.session.getStatus();
-      return { text: `Thinking effort: ${status.thinkingEffort}` };
-    }
-    await runtime.session.setThinking(level as never);
-    return { text: `Thinking effort set to ${level}.` };
-  },
-};
 
-const PERMISSION: SlashCommandSpec = {
-  name: 'permission',
-  description: 'Switch permission mode (default, plan, auto, yolo)',
-  argumentHint: '[mode]',
-  run: async (runtime, args) => {
-    const mode = args.trim().toLowerCase();
-    if (mode.length === 0) {
-      const status = await runtime.session.getStatus();
-      return { text: `Permission: ${status.permission}${status.planMode ? ' (plan mode)' : ''}` };
-    }
-    if (mode !== 'default' && mode !== 'plan' && mode !== 'auto' && mode !== 'yolo') {
-      return { text: 'Usage: /permission [default|plan|auto|yolo]' };
-    }
-    return switchMode(runtime, mode);
-  },
-};
 
-/** Apply an ACP mode and describe it; the runtime emits the mode/config updates. */
-async function switchMode(runtime: CommandRuntime, mode: 'default' | 'plan' | 'auto' | 'yolo'): Promise<CommandReply> {
-  if (runtime.setMode === undefined) return { text: 'Mode switching is unavailable.' };
-  await runtime.setMode(mode);
-  return { text: `Mode set to ${mode}.` };
-}
 
-const LOGOUT: SlashCommandSpec = {
-  name: 'logout',
-  description: 'Sign out of the Kimi account',
-  run: async (runtime) => {
-    await runtime.harness.auth.logout();
-    return { text: 'Signed out.' };
-  },
-};
+
+
+
+
+
 
 export const BUILTIN_COMMANDS: readonly SlashCommandSpec[] = [
-  HELP,
   STATUS,
   USAGE,
   GOAL,
@@ -367,11 +279,6 @@ export const BUILTIN_COMMANDS: readonly SlashCommandSpec[] = [
   ADD_DIR,
   TASKS,
   MCP,
-  PLUGINS,
-  MODEL,
-  EFFORT,
-  PERMISSION,
-  LOGOUT,
 ];
 
 /** The commands advertised to the client, in the ACP advertisement shape. */

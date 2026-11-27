@@ -728,10 +728,10 @@ async function commandScenario() {
       (update) => update.sessionUpdate === 'available_commands_update',
     );
     const names = (advertisement.availableCommands ?? []).map((command) => command.name);
-    for (const expected of ['goal', 'swarm', 'compact', 'status', 'permission']) {
+    for (const expected of ['goal', 'swarm', 'compact', 'status']) {
       if (!names.includes(expected)) throw new Error(`command "${expected}" is not advertised`);
     }
-    for (const hidden of ['model', 'effort', 'plugins', 'add-dir', 'plan', 'yolo', 'auto']) {
+    for (const hidden of ['model', 'effort', 'plugins', 'add-dir', 'plan', 'yolo', 'auto', 'permission', 'logout', 'help']) {
       if (names.includes(hidden)) throw new Error(`command "${hidden}" should not be advertised`);
     }
     for (const name of names) {
