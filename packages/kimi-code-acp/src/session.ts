@@ -30,7 +30,9 @@ import {
   goalCleared,
   notice,
   planNotification,
+  subagentAnnouncement,
   subagentCard,
+  subagentSessionId,
   subagentUpdate,
   type GoalSnapshotLike,
   type SubagentSpawnedLike,
@@ -83,6 +85,10 @@ export interface SessionBridgeOptions {
   readonly compaction?: boolean;
   /** The client is JetBrains AIR and takes the `jetbrains.air` payloads. */
   readonly air?: boolean;
+  /** The client declared `subagents`: it gets `subagent_update` and child traffic. */
+  readonly subagents?: boolean;
+  /** The session's working directory, reported for a child that inherits it. */
+  readonly cwd?: string;
   readonly send: (notification: SessionNotification) => Promise<void> | void;
 }
 
@@ -101,6 +107,8 @@ export class SessionBridge {
   private readonly userMessageIds: string[] = [];
   /** The last entity the client holds, for anchoring live cursors. */
   private lastEntity: CursorEntity | undefined;
+  /** Message ids of child agents' streams, by agent id (reset per child turn). */
+  private readonly childMessageIds = new Map<string, string>();
   /** Whether a plan was shown, so clearing it is reported (an empty `plan`). */
   private planShown = false;
   /** The compaction on screen, for `compaction_update` lifecycle pushes. */
@@ -364,7 +372,23 @@ export class SessionBridge {
   }
 
   private handleEvent(event: Event): void {
-    if (process.env['KIMI_ACP_EVENTS'] === '1') log.info('acp: engine event', { type: event.type });
+    if (process.env['KIMI_ACP_EVENTS'] === '1') {
+      log.info('acp: engine event', {
+        type: event.type,
+        agentId: (event as { agentId?: unknown }).agentId,
+      });
+    }
+    // The engine runs subagents in the same session: their lifecycle events
+    // are session-level, their live traffic carries the child's agent id.
+    if ((event.type as string).startsWith('subagent.')) {
+      this.handleSubagentEvent(event);
+      return;
+    }
+    const agentId = (event as { agentId?: unknown }).agentId;
+    if (typeof agentId === 'string' && agentId !== 'main') {
+      this.handleChildEvent(agentId, event);
+      return;
+    }
     // `turn.prompt` names the engine prompt that just started; the SDK's Event
     // union does not list it, but the engine emits it (and it carries the id a
     // cursor needs).
@@ -497,37 +521,6 @@ export class SessionBridge {
           void this.outbox.push(goalCard(this.options.sessionId, snapshot));
           this.goalId = snapshot.goalId;
         }
-        return;
-      }
-      case 'subagent.spawned': {
-        void this.outbox.push(subagentCard(this.options.sessionId, event as unknown as SubagentSpawnedLike));
-        return;
-      }
-      case 'subagent.started': {
-        void this.outbox.push(subagentUpdate(this.options.sessionId, event.subagentId, 'in_progress', undefined));
-        return;
-      }
-      case 'subagent.completed': {
-        void this.outbox.push(
-          subagentUpdate(
-            this.options.sessionId,
-            event.subagentId,
-            'completed',
-            event.resultSummary.length > 0 ? event.resultSummary : 'Subagent finished.',
-          ),
-        );
-        return;
-      }
-      case 'subagent.failed': {
-        void this.outbox.push(
-          subagentUpdate(this.options.sessionId, event.subagentId, 'failed', event.error),
-        );
-        return;
-      }
-      case 'subagent.cancelled': {
-        void this.outbox.push(
-          subagentUpdate(this.options.sessionId, event.subagentId, 'failed', 'Subagent cancelled.'),
-        );
         return;
       }
       case 'compaction.started': {
@@ -674,6 +667,102 @@ export class SessionBridge {
     void this.outbox.drain().then(() => {
       run.reject(error);
     });
+  }
+
+  /**
+   * A subagent lifecycle event: the parent's card always, and for a client
+   * that declared `subagents` the ACP `subagent_update` on the parent session
+   * (announce on spawn, state patches after).
+   */
+  private handleSubagentEvent(event: Event): void {
+    const parentId = this.options.sessionId;
+    const spawned = event as unknown as SubagentSpawnedLike;
+    const subagentId = typeof spawned.subagentId === 'string' ? spawned.subagentId : '';
+    if (subagentId.length === 0) return;
+    const announce = this.options.subagents === true;
+    switch (event.type) {
+      case 'subagent.spawned': {
+        void this.outbox.push(subagentCard(parentId, spawned));
+        if (announce) {
+          void this.outbox.push(
+            subagentAnnouncement(parentId, subagentId, {
+              title: spawned.subagentName,
+              ...(spawned.description === undefined ? {} : { description: spawned.description }),
+              ...(this.options.cwd === undefined ? {} : { cwd: this.options.cwd }),
+              state: { state: 'running' },
+            }),
+          );
+        }
+        return;
+      }
+      case 'subagent.started': {
+        void this.outbox.push(subagentUpdate(parentId, subagentId, 'in_progress', undefined));
+        if (announce) {
+          void this.outbox.push(subagentAnnouncement(parentId, subagentId, { state: { state: 'running' } }));
+        }
+        return;
+      }
+      case 'subagent.completed': {
+        const summary = event.resultSummary;
+        void this.outbox.push(
+          subagentUpdate(parentId, subagentId, 'completed', summary.length > 0 ? summary : 'Subagent finished.'),
+        );
+        if (announce) {
+          void this.outbox.push(
+            subagentAnnouncement(parentId, subagentId, { state: { state: 'idle', stopReason: 'end_turn' } }),
+          );
+        }
+        return;
+      }
+      case 'subagent.failed': {
+        void this.outbox.push(subagentUpdate(parentId, subagentId, 'failed', event.error));
+        if (announce) {
+          void this.outbox.push(subagentAnnouncement(parentId, subagentId, { state: { state: 'idle' } }));
+        }
+        return;
+      }
+      case 'subagent.cancelled': {
+        void this.outbox.push(subagentUpdate(parentId, subagentId, 'failed', 'Subagent cancelled.'));
+        if (announce) {
+          void this.outbox.push(
+            subagentAnnouncement(parentId, subagentId, { state: { state: 'idle', stopReason: 'cancelled' } }),
+          );
+        }
+        return;
+      }
+      default:
+        return;
+    }
+  }
+
+  /**
+   * A child agent's live event. It never touches the parent's run: a child's
+   * `turn.ended` is not the parent's, and its text is not the parent's message.
+   * For a client that declared `subagents`, text streams on the child's session.
+   */
+  private handleChildEvent(agentId: string, event: Event): void {
+    if (this.options.subagents !== true) return;
+    const childSessionId = subagentSessionId(this.options.sessionId, agentId);
+    const messageId = (() => {
+      const existing = this.childMessageIds.get(agentId);
+      if (existing !== undefined) return existing;
+      const created = `${childSessionId}:${randomUUID()}`;
+      this.childMessageIds.set(agentId, created);
+      return created;
+    })();
+    if (event.type === 'turn.started') {
+      this.childMessageIds.delete(agentId);
+      return;
+    }
+    if (event.type === 'turn.ended' || (event.type as string) === 'turn.prompt') return;
+    const text = (event as { delta?: unknown }).delta;
+    if (typeof text !== 'string' || text.length === 0) return;
+    const kind = event.type === 'assistant.delta' ? 'agent_message_chunk' : event.type === 'thinking.delta' ? 'agent_thought_chunk' : undefined;
+    if (kind === undefined) return;
+    void this.outbox.push({
+      sessionId: childSessionId,
+      update: { sessionUpdate: kind, content: { type: 'text', text }, messageId },
+    } as SessionNotification);
   }
 
   private emitText(kind: 'agent_message_chunk' | 'agent_thought_chunk', text: string): void {

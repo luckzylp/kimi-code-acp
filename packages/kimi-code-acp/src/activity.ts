@@ -192,6 +192,39 @@ export function subagentUpdate(
   };
 }
 
+/** The ACP session id a subagent's live traffic is delivered under. */
+export function subagentSessionId(parentSessionId: string, subagentId: string): string {
+  return `subagent:${parentSessionId}:${subagentId}`;
+}
+
+export type SubagentState =
+  | { readonly state: 'running' }
+  | { readonly state: 'idle'; readonly stopReason?: 'end_turn' | 'cancelled' }
+  | { readonly state: 'requires_action' }
+  | { readonly state: 'unknown' };
+
+/**
+ * A `subagent_update` on the parent session (clients that declared `subagents`):
+ * the first one announces the child, later ones patch its state.
+ */
+export function subagentAnnouncement(
+  parentSessionId: string,
+  subagentId: string,
+  patch: { readonly title?: string; readonly description?: string; readonly cwd?: string; readonly state?: SubagentState },
+): SessionNotification {
+  return {
+    sessionId: parentSessionId,
+    update: {
+      sessionUpdate: 'subagent_update',
+      sessionId: subagentSessionId(parentSessionId, subagentId),
+      ...(patch.title === undefined ? {} : { title: patch.title }),
+      ...(patch.description === undefined ? {} : { description: patch.description }),
+      ...(patch.cwd === undefined ? {} : { cwd: patch.cwd }),
+      ...(patch.state === undefined ? {} : { state: patch.state }),
+    },
+  } as SessionNotification;
+}
+
 /** The lifecycle states ACP defines for a compaction. */
 export type CompactionStatus = 'in_progress' | 'completed' | 'failed' | 'cancelled';
 

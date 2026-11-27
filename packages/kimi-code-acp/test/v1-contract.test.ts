@@ -81,6 +81,16 @@ const updates: Array<[string, Record<string, unknown>]> = [
   ['session_info_update', { sessionUpdate: 'session_info_update', title: 'A title' }],
   ['usage_update', { sessionUpdate: 'usage_update', used: 10, size: 100 }],
   [
+    'subagent_update',
+    {
+      sessionUpdate: 'subagent_update',
+      sessionId: 'subagent:parent:agent-0',
+      title: 'coder',
+      description: 'probe child',
+      state: { state: 'running' },
+    },
+  ],
+  [
     'compaction_update',
     { sessionUpdate: 'compaction_update', compactionId: 'c1', status: 'in_progress' },
   ],

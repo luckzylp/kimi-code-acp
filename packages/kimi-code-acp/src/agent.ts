@@ -415,6 +415,8 @@ async function registerSession(state: AgentState, session: KimiSession): Promise
     notices: state.capabilities.notices || v2 !== undefined,
     compaction: state.capabilities.compaction,
     air: state.capabilities.air,
+    subagents: state.capabilities.subagents,
+    cwd: session.workDir,
     send: async (notification) => {
       if (client !== undefined) {
         await client.notify(methods.client.session.update, notification);

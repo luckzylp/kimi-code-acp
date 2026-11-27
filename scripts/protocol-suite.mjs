@@ -1886,6 +1886,97 @@ test('rewind reaches a skill turn and drops what follows it', async () => {
   );
 });
 
+
+const SUBAGENT_SCRIPT = [
+  { kind: 'tool', id: 'agent_1', name: 'Agent', arguments: JSON.stringify({ description: 'probe child', prompt: 'child task' }) },
+  { kind: 'text', text: 'child answer' },
+  { kind: 'text', text: 'parent done' },
+];
+
+test('a subagent never settles the parent turn or speaks as the parent', async () => {
+  await withAgent({ script: SUBAGENT_SCRIPT }, async ({ agent, workDir }) => {
+    await boot(agent);
+    const sessionId = await newSession(agent, workDir);
+    const response = await prompt(agent, sessionId, 'spawn a child', 120_000);
+    if (response.stopReason !== 'end_turn') throw new Error(`stopReason ${response.stopReason}`);
+    const parentText = updates(agent)
+      .filter((update) => update.sessionUpdate === 'agent_message_chunk')
+      .map((update) => update.content?.text ?? '')
+      .join('');
+    if (!parentText.includes('parent done')) throw new Error(`the parent did not finish: ${parentText.slice(0, 120)}`);
+    if (parentText.includes('child answer')) throw new Error('the child spoke as the parent');
+    if (updates(agent).some((update) => update.sessionUpdate === 'subagent_update')) {
+      throw new Error('subagent_update was sent without the capability');
+    }
+    const card = updates(agent).find(
+      (update) => update.sessionUpdate === 'tool_call' && String(update.toolCallId).startsWith('subagent:'),
+    );
+    if (card === undefined) throw new Error('no subagent card');
+  });
+});
+
+test('a subagents-capable client gets subagent_update and the child stream', async () => {
+  await withAgent({ script: SUBAGENT_SCRIPT }, async ({ agent, workDir }) => {
+    const capabilities = zedCapabilities();
+    capabilities.subagents = {};
+    await boot(agent, { capabilities });
+    const sessionId = await newSession(agent, workDir);
+    await prompt(agent, sessionId, 'spawn a child', 120_000);
+    const announcements = updates(agent).filter((update) => update.sessionUpdate === 'subagent_update');
+    if (announcements.length < 3) throw new Error(`expected announce/running/idle, got ${announcements.length}`);
+    const childId = announcements[0].sessionId;
+    if (!childId.startsWith(`subagent:${sessionId}:`)) throw new Error(`child session id ${childId}`);
+    if (announcements[0].title !== 'coder') throw new Error(`title ${JSON.stringify(announcements[0].title)}`);
+    const states = announcements.map((update) => update.state?.state);
+    if (states.at(-1) !== 'idle') throw new Error(`states ${JSON.stringify(states)}`);
+    const childText = agent.notifications
+      .filter(
+        (message) =>
+          message.method === 'session/update' &&
+          message.params.sessionId === childId &&
+          message.params.update.sessionUpdate === 'agent_message_chunk',
+      )
+      .map((message) => message.params.update.content?.text ?? '')
+      .join('');
+    if (!childText.includes('child answer')) throw new Error(`child stream: ${JSON.stringify(childText)}`);
+    const parentText = agent.notifications
+      .filter(
+        (message) =>
+          message.method === 'session/update' &&
+          message.params.sessionId === sessionId &&
+          message.params.update.sessionUpdate === 'agent_message_chunk',
+      )
+      .map((message) => message.params.update.content?.text ?? '')
+      .join('');
+    if (parentText.includes('child answer')) throw new Error('the child leaked into the parent stream');
+  });
+});
+
+
+test('a long shell command keeps its full text in the card body', async () => {
+  const longDir = '/data/project/OrderProductionCollaborationSystem/packages/backend/src';
+  const command = `cd ${longDir} && ls -la`;
+  await withAgent(
+    { script: [{ kind: 'tool', id: 'call_long', name: 'Bash', arguments: JSON.stringify({ command }) }, { kind: 'text', text: 'done' }] },
+    async ({ agent, workDir }) => {
+      await boot(agent);
+      const sessionId = await newSession(agent, workDir);
+      await prompt(agent, sessionId, 'list it', 120_000);
+      const card = updates(agent).find(
+        (update) => update.sessionUpdate === 'tool_call' && update.toolCallId === '0:call_long',
+      );
+      if (card === undefined) throw new Error('no tool card');
+      if (card.title !== 'Running') throw new Error(`title is ${JSON.stringify(card.title)}`);
+      const text = (card.content ?? [])
+        .filter((entry) => entry.type === 'content')
+        .map((entry) => entry.content?.text ?? '')
+        .join('');
+      if (!text.includes(command)) throw new Error(`the card body lost the command: ${JSON.stringify(text)}`);
+      if (!text.includes('ls -la')) throw new Error('the card body is truncated');
+    },
+  );
+});
+
 // --- runner ----------------------------------------------------------------
 
 for (const { name, run } of cases) {

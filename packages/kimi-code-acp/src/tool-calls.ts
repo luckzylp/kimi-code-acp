@@ -141,7 +141,15 @@ function startContent(event: ToolCallStartedEvent): ToolCallContent[] {
       newText: display.after,
     });
   }
-  content.push({ type: 'content', content: { type: 'text', text: stringifyArgs(event.args) } });
+  if (display?.kind === 'command') {
+    const cwd = display.cwd === undefined ? '' : `# ${display.cwd}\n`;
+    content.push({
+      type: 'content',
+      content: { type: 'text', text: `${cwd}$ ${display.command}` },
+    });
+  } else {
+    content.push({ type: 'content', content: { type: 'text', text: stringifyArgs(event.args) } });
+  }
   return content;
 }
 
@@ -246,8 +254,14 @@ export class ToolCalls {
   started(event: ToolCallStartedEvent): void {
     const acpId = acpToolCallId(event.turnId, event.toolCallId);
     const kind = toolKind(event.name);
-    const title = event.description ?? event.name;
     const command = commandOf(event.display, event.args);
+    // A shell command in the title is cut to one line by the client (Zed renders
+    // "Running: <cmd>…"). Keep the title short and let the card's content carry
+    // the command, where the client can wrap or scroll it.
+    const title =
+      event.display?.kind === 'command' && command !== undefined
+        ? 'Running'
+        : event.description ?? event.name;
     const terminalId = this.options.shadowTerminals && kind === 'execute' && command !== undefined ? acpId : undefined;
     const call: TrackedCall = {
       acpId,

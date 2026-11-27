@@ -29,6 +29,8 @@ export interface ClientCapabilities {
   readonly compaction: boolean;
   /** The client declared itself as JetBrains AIR (`_meta.jetbrains.air`). */
   readonly air: boolean;
+  /** The client accepts `subagent_update` and child-session traffic (`subagents`). */
+  readonly subagents: boolean;
 }
 
 const NONE: ClientCapabilities = {
@@ -42,6 +44,7 @@ const NONE: ClientCapabilities = {
   notices: false,
   compaction: false,
   air: false,
+  subagents: false,
 };
 
 type CapabilitiesCarrier =
@@ -81,6 +84,7 @@ export function readClientCapabilities(capabilities: CapabilitiesCarrier): Clien
     notices: session?.notices != null,
     compaction: session?.compaction != null,
     air: airExtension(capabilities) !== undefined,
+    subagents: (capabilities as { subagents?: unknown } | null | undefined)?.subagents != null,
   };
 }
 /**
@@ -95,5 +99,7 @@ export function readV2Capabilities(capabilities: unknown): ClientCapabilities {
     ...NONE,
     promptSuggestions: session?.promptSuggestions != null,
     elicitationForm: elicitation?.form != null,
+    // The v2 draft treats every session as subagent-capable.
+    subagents: true,
   };
 }
