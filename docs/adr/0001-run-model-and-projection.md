@@ -47,6 +47,22 @@ The adapter is Apache/MIT-adjacent work we can own: `kimi-code` is MIT, its
 `@modelcontextprotocol/sdk`, `@noble/hashes` undeclared, so the only workable
 dependency is the monorepo source at a pinned tag.
 
+## Boundary: no upstream changes
+
+Every adapter behaviour lives in `packages/kimi-acp`; the pinned kimi-code
+tree is a build input, never a patch target. `vendor/upstream` is extracted from
+the tag in `upstream.json`, is untracked, and is not a git checkout, so no
+upstream source edit can survive a rebuild. The build copies the adapter into
+that tree only for the duration of a build (pnpm needs a real workspace
+package). `scripts/check-boundary.mjs` (run first by `npm run verify`) fails the
+build if vendor/ becomes tracked, if the tree drifts from the pinned tag, or if
+an adapter source imports a relative path into vendor/.
+
+The only imported upstream modules are package entry points
+(`@moonshot-ai/kimi-code-sdk`, plus a type-only subpath of
+`@moonshot-ai/agent-core-v2`). No monkey-patching: the adapter only calls the
+SDK's public surface.
+
 ## Decision 1 — Own the adapter, built against a pinned upstream tag
 
 `kimi-acp` is a new repository. Its source is our own; it is compiled *inside*

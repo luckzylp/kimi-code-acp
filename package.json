@@ -18,6 +18,7 @@
     "pack": "node scripts/pack.mjs",
     "test": "node scripts/test.mjs",
     "test:protocol": "node scripts/protocol-suite.mjs",
-    "sync:zed": "node scripts/install-zed.mjs"
+    "sync:zed": "node scripts/install-zed.mjs",
+    "check:boundary": "node scripts/check-boundary.mjs"
   }
 }

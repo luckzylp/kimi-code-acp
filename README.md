@@ -13,6 +13,15 @@ turns no prompt owns, so goal continuations, swarm members and late background
 notifications run dark. Fixing that inside their file lands in the same
 functions that already carry eight local patches. See the ADR's alternatives.
 
+## No upstream patches
+
+The adapter is self-contained in `packages/kimi-acp`. `vendor/upstream` is a
+disposable copy of the pinned tag (untracked, rebuilt by
+`node scripts/upstream.mjs`) and is never edited; `npm run verify` starts with
+`scripts/check-boundary.mjs`, which fails if vendor/ becomes tracked, drifts
+from the pinned version, or if adapter sources import into it. Installing into
+Zed replaces the package's compiled entry (`dist/main.mjs`), not its source.
+
 ## Install into Zed
 
 Zed's npx registry keeps kimi-code at
