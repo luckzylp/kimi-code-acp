@@ -1697,6 +1697,18 @@ test('a custom API key from the environment reaches the provider', async () => {
   }
 });
 
+test('/login reports the sign-in state', async () => {
+  await withAgent({ script: [] }, async ({ agent, workDir }) => {
+    await boot(agent);
+    const sessionId = await newSession(agent, workDir);
+    const { text } = await runCommand(agent, sessionId, '/login');
+    // No Kimi account in the fake home: the command says how to get one and
+    // that custom providers work without it.
+    if (!text.includes('Not signed in')) throw new Error(`login status: ${JSON.stringify(text)}`);
+    if (!text.includes('kimi-acp login')) throw new Error('the hint does not name the login command');
+  });
+});
+
 test('session/set_title sets the title and emits session info', async () => {
   await withAgent({ script: [] }, async ({ agent, workDir }) => {
     const init = await boot(agent);

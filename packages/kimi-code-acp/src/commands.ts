@@ -198,6 +198,24 @@ const TITLE: SlashCommandSpec = {
   },
 };
 
+const LOGIN: SlashCommandSpec = {
+  name: 'login',
+  description: 'Show the Kimi account this agent is signed in with',
+  run: async (runtime) => {
+    const status = await runtime.harness.auth.status();
+    const managed = status.providers.find((provider) => provider.providerName === 'managed:kimi-code');
+    if (managed?.hasToken === true) {
+      return { text: `Signed in with a Kimi account (${managed.providerName}).` };
+    }
+    return {
+      text:
+        'Not signed in with a Kimi account. Use the client\'s sign-in action, or run `kimi-acp login` ' +
+        'in a terminal. Custom providers work without it; the Kimi account is what lets the engine ' +
+        'title sessions and use its own models.',
+    };
+  },
+};
+
 const ADD_DIR: SlashCommandSpec = {
   name: 'add-dir',
   description: 'Add a directory to this session',
@@ -278,6 +296,7 @@ export const BUILTIN_COMMANDS: readonly SlashCommandSpec[] = [
   INIT,
   UNDO,
   TITLE,
+  LOGIN,
   ADD_DIR,
   TASKS,
   MCP,

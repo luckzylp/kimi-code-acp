@@ -895,6 +895,24 @@ export async function authenticate(
       });
     },
   });
+  log.info('acp: signed in with a Kimi account');
+  // The login provisions the managed provider and its models in the config, so
+  // every open session has new model options to show - and from here on the
+  // engine titles sessions itself instead of the adapter asking the model.
+  for (const entry of state.sessions.values()) {
+    try {
+      const { configOptions } = await surface(state, entry.session);
+      await entry.bridge.post({
+        sessionId: entry.session.id,
+        update: { sessionUpdate: 'config_option_update', configOptions },
+      });
+    } catch (error) {
+      log.warn('acp: failed to refresh config options after login', {
+        sessionId: entry.session.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
   return {};
 }
 
@@ -1185,7 +1203,7 @@ async function maybeGenerateTitle(
   // titled once its answer is in.
   if (when === 'prompt' && prompt.length < MIN_TITLE_PROMPT_CHARS) return;
   entry.titleAttempts += 1;
-  entry.titleInFlight = attemptTitle(state, entry, prompt);
+  entry.titleInFlight = attemptTitle(state, entry, prompt, when === 'prompt' ? 'user_prompts' : 'first_turn');
   try {
     await entry.titleInFlight;
   } finally {
@@ -1193,12 +1211,21 @@ async function maybeGenerateTitle(
   }
 }
 
-async function attemptTitle(state: AgentState, entry: SessionEntry, prompt: string): Promise<void> {
+async function attemptTitle(
+  state: AgentState,
+  entry: SessionEntry,
+  prompt: string,
+  source: 'user_prompts' | 'first_turn',
+): Promise<void> {
   const sessionId = entry.session.id;
   try {
     const harness = await harnessOf(state);
+    // The engine's own generator is the good one — it runs against the managed
+    // Kimi account and only serves a signed-in user — and it needs the source
+    // that fits the moment: the prompts before a turn, the first exchange
+    // after it (its `first_turn` input requires the assistant's answer).
     const engineTitle = await harness
-      .generateSessionTitle({ id: sessionId, source: 'first_turn' })
+      .generateSessionTitle({ id: sessionId, source })
       .catch(() => undefined);
     if (engineTitle !== undefined) {
       entry.titled = true;
