@@ -46,6 +46,26 @@ import { AGENT_NAME, VERSION } from './version';
 
 const V2_PROTOCOL_VERSION = 2;
 
+
+/**
+ * v1 handlers throw the 2.12 SDK's RequestError; the pinned v2 app knows only
+ * its own class. Rebuild the JSON-RPC error so the client sees the real code
+ * and message instead of an internal error.
+ */
+function mapV2Error(error: unknown): never {
+  const candidate = error as { code?: unknown; message?: unknown; data?: unknown };
+  if (typeof candidate?.code === 'number' && typeof candidate.message === 'string') {
+    throw new v2.RequestError(candidate.code, candidate.message, candidate.data);
+  }
+  throw error;
+}
+
+function guarded<R>(run: () => R | Promise<R>): Promise<R> {
+  return Promise.resolve()
+    .then(run)
+    .catch((error: unknown) => mapV2Error(error));
+}
+
 export function createV2App(state: AgentState): { app: v2.AgentApp } {
   const app = v2
     .agent({ name: AGENT_NAME })
@@ -57,26 +77,36 @@ export function createV2App(state: AgentState): { app: v2.AgentApp } {
       };
     })
     .onRequest('initialize', (context) => initialize(state, context.params))
-    .onRequest('session/new', (context) => newSessionV2(state, context.params))
-    .onRequest('session/resume', (context) => resumeSessionV2(state, context.params))
-    .onRequest('session/fork', (context) => forkSessionV2(state, context.params))
-    .onRequest('session/list', (context) => listSessionsV2(state, context.params))
-    .onRequest('session/delete', (context) => deleteSessionV2(state, context.params))
-    .onRequest('session/close', (context) => closeSessionV2(state, context.params))
-    .onRequest('session/set_config_option', (context) => setConfigOptionV2(state, context.params))
-    .onRequest('session/prompt', (context) => promptV2(state, context.params, context.signal))
-    .onRequest('providers/list', async () => (await listProviders(await harnessOf(state))) as never)
+    .onRequest('session/new', (context) => guarded(() => newSessionV2(state, context.params)))
+    .onRequest('session/resume', (context) => guarded(() => resumeSessionV2(state, context.params)))
+    .onRequest('session/fork', (context) => guarded(() => forkSessionV2(state, context.params)))
+    .onRequest('session/list', (context) => guarded(() => listSessionsV2(state, context.params)))
+    .onRequest('session/delete', (context) => guarded(() => deleteSessionV2(state, context.params)))
+    .onRequest('session/close', (context) => guarded(() => closeSessionV2(state, context.params)))
+    .onRequest('session/set_config_option', (context) =>
+      guarded(() => setConfigOptionV2(state, context.params)),
+    )
+    .onRequest('session/prompt', (context) =>
+      guarded(() => promptV2(state, context.params, context.signal)),
+    )
+    .onRequest('providers/list', () => guarded(async () => (await listProviders(await harnessOf(state))) as never))
     .onRequest('providers/set', () => {
       throw v2.RequestError.invalidParams(undefined, 'provider management is not supported by the kimi engine');
     })
     .onRequest('providers/disable', () => {
       throw v2.RequestError.invalidParams(undefined, 'provider management is not supported by the kimi engine');
     })
-    .onRequest('auth/login', (context) => authenticate(state, context.params as never))
-    .onRequest('auth/logout', (context) => logout(state, context.params as never))
-    .onRequest(STEER_METHOD, parseSteerRequest, (context) => steerRequest(state, context.params))
-    .onRequest(GOAL_METHOD, parseGoalRequest, (context) => goalRequest(state, context.params) as never)
-    .onRequest(REWIND_METHOD, parseRewindRequest, (context) => rewindRequest(state, context.params) as never)
+    .onRequest('auth/login', (context) => guarded(() => authenticate(state, context.params as never)))
+    .onRequest('auth/logout', (context) => guarded(() => logout(state, context.params as never)))
+    .onRequest(STEER_METHOD, parseSteerRequest, (context) =>
+      guarded(() => steerRequest(state, context.params)),
+    )
+    .onRequest(GOAL_METHOD, parseGoalRequest, (context) =>
+      guarded(async () => (await goalRequest(state, context.params)) as never),
+    )
+    .onRequest(REWIND_METHOD, parseRewindRequest, (context) =>
+      guarded(async () => (await rewindRequest(state, context.params)) as never),
+    )
     .onNotification('mcp/message', (context) => {
       // Server-initiated MCP traffic: hand it to the bridge that owns the
       // connection so the proxy can write it to the engine's MCP client.

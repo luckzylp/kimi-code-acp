@@ -721,7 +721,13 @@ export async function authenticate(
 
 export async function logout(state: AgentState, _params: LogoutRequest): Promise<LogoutResponse> {
   const harness = await harnessOf(state);
-  await harness.auth.logout();
+  try {
+    await harness.auth.logout();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    log.warn('acp: logout failed', { error: message });
+    throw RequestError.invalidRequest(undefined, `logout failed: ${message}`);
+  }
   return {};
 }
 

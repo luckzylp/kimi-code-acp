@@ -1419,6 +1419,167 @@ test('AIR goal updates carry the goal payload', async () => {
     },
   );
 });
+
+// --- remaining surface -----------------------------------------------------
+
+test('providers/set and providers/disable are rejected (v1 and v2)', async () => {
+  await withAgent({ script: [] }, async ({ agent }) => {
+    await boot(agent);
+    await expectReject(agent.request('providers/set', { providerId: 'x', apiType: 'openai', baseUrl: 'https://example.test/v1' }, 5_000), 'v1 providers/set');
+    await expectReject(agent.request('providers/disable', { providerId: 'x' }, 5_000), 'v1 providers/disable');
+  });
+  await withAgent({ script: [] }, async ({ agent }) => {
+    await boot(agent, { protocolVersion: 2 });
+    await expectReject(agent.request('providers/set', { providerId: 'x', apiType: 'openai', baseUrl: 'https://example.test/v1' }, 5_000), 'v2 providers/set');
+    await expectReject(agent.request('providers/disable', { providerId: 'x' }, 5_000), 'v2 providers/disable');
+  });
+});
+
+test('set_mode supports auto and yolo', async () => {
+  await withAgent({ script: [] }, async ({ agent, workDir }) => {
+    await boot(agent);
+    const sessionId = await newSession(agent, workDir);
+    for (const mode of ['auto', 'yolo', 'default']) {
+      await agent.request('session/set_mode', { sessionId, modeId: mode });
+      const modes = updates(agent)
+        .filter((update) => update.sessionUpdate === 'current_mode_update')
+        .map((update) => update.currentModeId);
+      if (!modes.includes(mode)) throw new Error(`mode ${mode} was not applied`);
+    }
+  });
+});
+
+test('set_config_option accepts an advertised thinking level', async () => {
+  await withAgent({ script: [] }, async ({ agent, workDir }) => {
+    await boot(agent);
+    const created = await agent.request('session/new', { cwd: workDir, mcpServers: [] });
+    const thinking = (created.configOptions ?? []).find((option) => option.id === 'thinking');
+    if (thinking === undefined) throw new Error('no thinking option was advertised');
+    const value = thinking.options?.[0]?.value;
+    if (typeof value !== 'string') throw new Error('the thinking option has no values');
+    await agent.request('session/set_config_option', {
+      sessionId: created.sessionId,
+      configId: 'thinking',
+      value,
+    });
+    const configured = updates(agent)
+      .filter((update) => update.sessionUpdate === 'config_option_update')
+      .at(-1);
+    const applied = (configured?.configOptions ?? []).find((option) => option.id === 'thinking');
+    if (applied?.currentValue !== value) throw new Error('the thinking level did not change');
+  });
+});
+
+test('/tower answers with a status or a notice', async () => {
+  await withAgent({ script: [] }, async ({ agent, workDir }) => {
+    await boot(agent);
+    const sessionId = await newSession(agent, workDir);
+    const { response, text } = await runCommand(agent, sessionId, '/tower');
+    if (response.stopReason !== 'end_turn') throw new Error(`stopReason ${response.stopReason}`);
+    if (!/tower|Command failed|not implemented/i.test(text)) {
+      throw new Error(`unexpected answer: ${text.slice(0, 200)}`);
+    }
+  });
+});
+
+test('/effort reports or sets the level', async () => {
+  await withAgent({ script: [] }, async ({ agent, workDir }) => {
+    await boot(agent);
+    const sessionId = await newSession(agent, workDir);
+    const listed = await runCommand(agent, sessionId, '/effort');
+    if (!/Thinking effort/i.test(listed.text)) throw new Error(`/effort: ${listed.text}`);
+    const set = await runCommand(agent, sessionId, '/effort low');
+    if (!/Thinking effort set to low|Command failed/i.test(set.text)) {
+      throw new Error(`/effort low: ${set.text.slice(0, 200)}`);
+    }
+  });
+});
+
+test('an invalid MCP server shape is rejected, a failing server is tolerated', async () => {
+  await withAgent({ script: [{ kind: 'text', text: 'still works' }] }, async ({ agent, workDir }) => {
+    await boot(agent);
+    // The ACP schema rejects a server with neither command nor url.
+    await expectReject(
+      agent.request('session/new', { cwd: workDir, mcpServers: [{ name: 'broken' }] }, 10_000),
+      'a malformed MCP server',
+    );
+    // A well-formed server that cannot start must not fail the session.
+    const created = await agent.request('session/new', {
+      cwd: workDir,
+      mcpServers: [{ name: 'missing', command: '/definitely/not/a/binary', args: [], env: [] }],
+    });
+    const response = await prompt(agent, created.sessionId, 'hello');
+    if (response.stopReason !== 'end_turn') throw new Error(`stopReason ${response.stopReason}`);
+    if (!lastText(agent).includes('still works')) throw new Error('the session did not answer');
+  });
+});
+
+test('logout either signs out or explains why it cannot', async () => {
+  const outcome = async (agent, method) => {
+    try {
+      const result = await agent.request(method, {}, 30_000);
+      return { ok: true, result };
+    } catch (error) {
+      return { ok: false, message: error instanceof Error ? error.message : String(error) };
+    }
+  };
+  await withAgent({ script: [] }, async ({ agent }) => {
+    await boot(agent);
+    const result = await outcome(agent, 'logout');
+    if (result.ok) {
+      if (result.result === undefined) throw new Error('v1 logout returned nothing');
+    } else if (!/logout failed/i.test(result.message) || result.message.includes('-32603')) {
+      throw new Error(`v1 logout failed opaquely: ${result.message}`);
+    }
+  });
+  await withAgent({ script: [] }, async ({ agent }) => {
+    await boot(agent, { protocolVersion: 2 });
+    const result = await outcome(agent, 'auth/logout');
+    if (result.ok) {
+      if (result.result === undefined) throw new Error('v2 logout returned nothing');
+    } else if (!/logout failed/i.test(result.message) || result.message.includes('-32603')) {
+      throw new Error(`v2 logout failed opaquely: ${result.message}`);
+    }
+  });
+});
+
+test('v2 session lifecycle, steering and goal', async () => {
+  await withAgent(
+    { script: [{ kind: 'text', text: 'v2 answer' }, { kind: 'text', text: 'slow' }, { kind: 'text', text: 'after' }], delayMs: 2_000 },
+    async ({ agent, workDir }) => {
+      await boot(agent, { protocolVersion: 2 });
+      const created = await agent.request('session/new', { cwd: workDir });
+      const sessionId = created.sessionId;
+      const listed = await agent.request('session/list', {});
+      if (!(listed.sessions ?? []).some((session) => session.sessionId === sessionId)) {
+        throw new Error('v2 session/list missed the session');
+      }
+      const forked = await agent.request('session/resume', { sessionId, cwd: workDir, mcpServers: [] }, 60_000);
+      if (forked === undefined) throw new Error('v2 session/resume returned nothing');
+
+      const running = agent.request('session/prompt', { sessionId, prompt: [{ type: 'text', text: 'start' }] }, 60_000);
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 300));
+      const injected = await agent.request('_session/steering', {
+        sessionId,
+        prompt: [{ type: 'text', text: 'also this' }],
+      }, 30_000);
+      if (injected.outcome !== 'injected') throw new Error(`v2 steering outcome ${injected.outcome}`);
+      await running;
+
+      await agent.request('_session/goal', { sessionId, action: 'set', objective: 'v2 objective' });
+      await waitFor(
+        () => updates(agent).some((update) => String(update.toolCallId ?? '').startsWith('goal:')),
+        'the v2 goal card',
+      );
+      await agent.request('_session/goal', { sessionId, action: 'clear' });
+
+      const fork = await agent.request('session/fork', { sessionId, cwd: workDir, mcpServers: [] }, 60_000);
+      if (typeof fork.sessionId !== 'string') throw new Error('v2 fork returned no session');
+      await agent.request('session/delete', { sessionId: fork.sessionId }, 30_000);
+      await agent.request('session/close', { sessionId: fork.sessionId }, 30_000);
+    },
+  );
+});
 // --- runner ----------------------------------------------------------------
 
 for (const { name, run } of cases) {

@@ -98,6 +98,13 @@ opens the v1 or the v2 app. v2 requests delegate to the same session machinery;
 - **Replay rules** (`src/replay.ts`): injected reminders stripped, TodoList
   restored as a plan, goals restored from `goal_updated` records.
 
+## Error mapping
+
+v1 handlers throw the 2.12 SDK's `RequestError`; the pinned v2 app only knows
+its own class, so the v2 boundary rebuilds the JSON-RPC error from
+`{code, message, data}`. Without that, a failing v2 request (logout,
+providers) surfaced as `-32603 Internal error`.
+
 ## Not verified here
 
 - A real Zed session (sign-in, tool cards, terminal shadow, goal card) — needs
