@@ -1936,7 +1936,7 @@ test('a long shell command keeps its full text in the card body', async () => {
         (update) => update.sessionUpdate === 'tool_call' && update.toolCallId === '0:call_long',
       );
       if (card === undefined) throw new Error('no tool card');
-      if (card.title !== 'Running') throw new Error(`title is ${JSON.stringify(card.title)}`);
+      if (card.title !== command) throw new Error(`title is ${JSON.stringify(card.title)}`);
       const text = (card.content ?? [])
         .filter((entry) => entry.type === 'content')
         .map((entry) => entry.content?.text ?? '')

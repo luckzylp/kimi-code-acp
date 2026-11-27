@@ -217,6 +217,7 @@ interface TrackedCall {
   exitCode: number | undefined;
   signal: string | undefined;
   readonly startedAt: number;
+  finished: boolean;
 }
 
 export interface ToolCallsOptions {
@@ -255,12 +256,12 @@ export class ToolCalls {
     const acpId = acpToolCallId(event.turnId, event.toolCallId);
     const kind = toolKind(event.name);
     const command = commandOf(event.display, event.args);
-    // A shell command in the title is cut to one line by the client (Zed renders
-    // "Running: <cmd>…"). Keep the title short and let the card's content carry
-    // the command, where the client can wrap or scroll it.
+    // Zed renders an execute tool's title as the command (a wrapping code block
+    // in the card, and the display terminal's label), so the title must be the
+    // command itself; a verb like "Running" would hide it.
     const title =
       event.display?.kind === 'command' && command !== undefined
-        ? 'Running'
+        ? command
         : event.description ?? event.name;
     const terminalId = this.options.shadowTerminals && kind === 'execute' && command !== undefined ? acpId : undefined;
     const call: TrackedCall = {
@@ -277,6 +278,7 @@ export class ToolCalls {
       exitCode: undefined,
       signal: undefined,
       startedAt: this.now(),
+      finished: false,
     };
     this.calls.set(event.toolCallId, call);
 
@@ -371,8 +373,44 @@ export class ToolCalls {
         ...(Object.keys(meta).length === 0 ? {} : { _meta: meta }),
       },
     });
+    call.finished = true;
     this.clear(call);
     this.calls.delete(event.toolCallId);
+  }
+
+  /**
+   * Close calls of a turn that ended without a result event (interrupted or
+   * detached). A client keeps a stale in-progress card — and may keep the
+   * composer disabled — until every call reaches a terminal status.
+   */
+  settleTurn(turnId: number, status: 'completed' | 'failed'): void {
+    for (const [toolCallId, call] of this.calls) {
+      if (call.finished || !call.acpId.startsWith(`${turnId}:`)) continue;
+      this.flushArgs(call);
+      this.flushTerminal(call);
+      call.finished = true;
+      const meta =
+        call.terminalId === undefined
+          ? {}
+          : {
+              terminal_exit: {
+                terminal_id: call.terminalId,
+                exit_code: call.exitCode ?? (status === 'failed' ? 1 : 0),
+                signal: call.signal ?? null,
+              },
+            };
+      this.emit({
+        sessionId: this.options.sessionId,
+        update: {
+          sessionUpdate: 'tool_call_update',
+          toolCallId: call.acpId,
+          status,
+          ...(Object.keys(meta).length === 0 ? {} : { _meta: meta }),
+        },
+      });
+      this.clear(call);
+      this.calls.delete(toolCallId);
+    }
   }
 
   /** Drop timers for every in-flight call, e.g. when the session closes. */

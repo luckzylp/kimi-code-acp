@@ -455,6 +455,10 @@ export class SessionBridge {
       }
       case 'turn.ended': {
         this.lastTurnId = event.turnId;
+        this.toolCalls.settleTurn(
+          event.turnId,
+          event.reason === 'completed' ? 'completed' : 'failed',
+        );
         this.assistant.flushNow();
         this.thought.flushNow();
         this.messageId = undefined;

@@ -11,6 +11,8 @@
  */
 import type { KimiConfig } from '@moonshot-ai/kimi-code-sdk';
 
+import { log } from './log';
+
 
 const MAX_TITLE_CHARS = 60;
 const REQUEST_TIMEOUT_MS = 10_000;
@@ -123,10 +125,17 @@ async function requestTitle(
             content: [{ type: 'input_text', text: `${SYSTEM_PROMPT}\n\n${userText}` }],
           },
         ],
-        max_output_tokens: 64,
+        max_output_tokens: 512,
       }),
     });
-    if (!response.ok) return undefined;
+    if (!response.ok) {
+      log.warn('acp: title request failed', {
+        apiType: model.apiType,
+        status: response.status,
+        body: (await response.text()).slice(0, 200),
+      });
+      return undefined;
+    }
     const body = (await response.json()) as {
       output_text?: unknown;
       output?: readonly { content?: readonly { text?: unknown }[] }[];
@@ -150,15 +159,32 @@ async function requestTitle(
         { role: 'system', content: SYSTEM_PROMPT },
         { role: 'user', content: userText },
       ],
-      max_tokens: 32,
+      // Reasoning models spend the budget on reasoning first: 32 tokens left
+      // deepseek returning an empty `content` (the title never appeared). 512
+      // is enough for a short reasoning pass plus the title.
+      max_tokens: 512,
       temperature: 0.2,
       stream: false,
     }),
   });
+  if (!response.ok) {
+    log.warn('acp: title request failed', {
+      apiType: model.apiType,
+      status: response.status,
+      body: (await response.text()).slice(0, 200),
+    });
+    return undefined;
+  }
   const payload = (await response.json()) as {
     choices?: readonly { message?: { content?: unknown } }[];
   };
   const content = payload.choices?.[0]?.message?.content;
+  if (process.env['KIMI_ACP_TITLE_DEBUG'] === '1') {
+    log.info('acp: title response', {
+      status: response.status,
+      content: typeof content === 'string' ? content.slice(0, 80) : null,
+    });
+  }
   return typeof content === 'string' ? sanitize(content) : undefined;
 }
 
