@@ -15,6 +15,8 @@ import { log } from './log';
 
 
 const MAX_TITLE_CHARS = 60;
+/** A rename that neither answers nor fails in this time is given up on. */
+const TITLE_TIMEOUT_MS = 10_000;
 /** A reasoning model spends most of a short request thinking before it answers. */
 const REQUEST_TIMEOUT_MS = 30_000;
 const ATTEMPTS = 2;
@@ -188,6 +190,45 @@ async function requestTitle(
     });
   }
   return typeof content === 'string' ? sanitize(content) : undefined;
+}
+
+/** A session whose renames are serialized through `withTitleLock`. */
+export interface TitleLockHolder {
+  titleLock: Promise<void>;
+}
+
+function bounded<T>(work: Promise<T>, timeoutMs: number, what: string): Promise<T> {
+  return Promise.race([
+    work,
+    new Promise<never>((_resolve, reject) => {
+      setTimeout(() => reject(new Error(`${what} timed out after ${timeoutMs}ms`)), timeoutMs).unref?.();
+    }),
+  ]);
+}
+
+/**
+ * Run one rename with the session's title lock held, so the last writer is
+ * the user's. Both the wait for the lock and the rename itself are bounded: a
+ * rename the engine never answers must not block every later one. Giving up
+ * does not cancel the rename — if it lands after all, it can still overwrite
+ * what was applied meanwhile, which is the price of not waiting forever.
+ */
+export async function withTitleLock<T>(
+  holder: TitleLockHolder,
+  rename: () => Promise<T>,
+  timeoutMs: number = TITLE_TIMEOUT_MS,
+): Promise<T> {
+  const previous = holder.titleLock;
+  let release = (): void => undefined;
+  holder.titleLock = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  try {
+    await bounded(previous, timeoutMs, 'title lock');
+    return await bounded(rename(), timeoutMs, 'session rename');
+  } finally {
+    release();
+  }
 }
 
 /**

@@ -18,7 +18,7 @@ type Listener = (event: Event) => void;
 
 function fakeSession() {
   const listeners: Listener[] = [];
-  const calls = { cancel: 0, stopped: [] as string[] };
+  const calls = { cancel: 0, stopped: [] as string[], prompts: 0, steers: [] as Array<string | undefined> };
   const session = {
     id: 'session_test',
     workDir: '/tmp',
@@ -29,8 +29,11 @@ function fakeSession() {
         if (index !== -1) listeners.splice(index, 1);
       };
     },
-    prompt: () => Promise.resolve(undefined),
-    steer: () => Promise.resolve(undefined),
+    prompt: () => Promise.resolve({ promptId: `prompt_${calls.prompts += 1}`, state: 'running', steered: false }),
+    steer: (_input: unknown, options?: { promptId?: string }) => {
+      calls.steers.push(options?.promptId);
+      return Promise.resolve({ promptId: options?.promptId, state: 'queued', steered: true });
+    },
     cancel: () => {
       calls.cancel += 1;
       return Promise.resolve();
@@ -93,8 +96,8 @@ function foregroundCommand(overrides: { runInBackground?: boolean } = {}) {
   };
 }
 
-function turnStarted(turnId = 1, origin: Record<string, unknown> = { kind: 'user' }) {
-  return { type: 'turn.started', agentId: 'main', turnId, origin, prompt: 'do it' };
+function turnStarted(turnId = 1, origin: Record<string, unknown> = { kind: 'user' }, promptId?: string) {
+  return { type: 'turn.started', agentId: 'main', turnId, origin, prompt: 'do it', ...(promptId === undefined ? {} : { promptId }) };
 }
 
 function turnEnded(turnId = 1, reason = 'completed') {
@@ -314,13 +317,15 @@ describe('a run and the background work its turn started', () => {
   it('stops the turn of a run cancelled before that turn started', async () => {
     const { bridge, emit, calls } = bridgeWith();
     const first = observe(bridge.prompt('do it') as Promise<string>);
+    await sleep(5); // the engine accepted the prompt and named it
+    expect(calls.prompts).toBe(1);
     // The engine cannot cancel a prompt with no active turn, so the answer is
-    // ours to give and the turn is ours to stop once it starts.
+    // ours to give and the turn is ours to stop once it starts, matched by id.
     bridge.cancel();
     await sleep(5);
     expect(first.reason).toBe('cancelled');
-    expect(bridge.isBusy()).toBe(false);
-    emit(turnStarted());
+    expect(calls.cancel).toBe(1);
+    emit(turnStarted(1, { kind: 'user' }, 'prompt_1'));
     emit(turnEnded(1, 'cancelled'));
     await sleep(5);
     expect(calls.cancel).toBe(2);
@@ -328,21 +333,65 @@ describe('a run and the background work its turn started', () => {
     expect(bridge.isBusy()).toBe(false);
   });
 
-  it('leaves the orphan turn alone when a newer prompt owns the session', async () => {
-    const { bridge, emit, calls } = bridgeWith();
+  it('decides a turn that started before the cancelled run\'s id was known', async () => {
+    let accept!: (value: { promptId: string }) => void;
+    const { bridge, emit, calls } = bridgeWith(5, {
+      prompt: () =>
+        new Promise<{ promptId: string }>((resolve) => {
+          accept = resolve;
+        }),
+    });
     const first = observe(bridge.prompt('do it') as Promise<string>);
     bridge.cancel();
     await sleep(5);
     expect(first.reason).toBe('cancelled');
-    // The user sent another prompt before the cancelled one's turn began; the
-    // engine queues it behind that turn, so stopping the turn would abort the
-    // continuation it needs.
-    const second = observe(bridge.prompt('and this') as Promise<string>);
-    emit(turnStarted());
-    expect(calls.cancel).toBe(1);
-    emit(turnEnded());
+    emit(turnStarted(1, { kind: 'user' }, 'prompt_late'));
+    expect(calls.cancel).toBe(1); // not known yet whose turn this is
+    accept({ promptId: 'prompt_late' });
     await sleep(5);
-    expect(second.reason).toBe('end_turn');
+    expect(calls.cancel).toBe(2);
+  });
+
+  it('stops a steered prompt\'s turn that the engine keeps for after the cancel', async () => {
+    const { bridge, emit, calls } = bridgeWith();
+    const first = observe(bridge.prompt('do it') as Promise<string>);
+    await sleep(5);
+    emit(turnStarted(1, { kind: 'user' }, 'prompt_1'));
+    const second = observe(bridge.steerAsRun('and this too') as Promise<string>);
+    const steeredId = calls.steers[0];
+    expect(typeof steeredId).toBe('string');
+    // The user cancels: the active turn ends cancelled and the steered run is
+    // answered cancelled here — but the engine still runs the steered prompt as
+    // the next turn. That turn belongs to nobody now, and must be stopped.
+    bridge.cancel();
+    emit(turnEnded(1, 'cancelled'));
+    await sleep(5);
+    expect(first.reason).toBe('cancelled');
+    expect(second.reason).toBe('cancelled');
+    expect(calls.cancel).toBe(1); // only the user's cancel so far
+    emit(turnStarted(2, { kind: 'user' }, steeredId));
+    await sleep(5);
+    expect(calls.cancel).toBe(2);
+    emit(turnEnded(2, 'cancelled'));
+    expect(bridge.isBusy()).toBe(false);
+  });
+
+  it('leaves a user turn alone that no cancelled run owns', async () => {
+    const { bridge, emit, calls } = bridgeWith();
+    const first = observe(bridge.prompt('do it') as Promise<string>);
+    await sleep(5);
+    bridge.cancel();
+    await sleep(5);
+    // `_session/steering` into an idle session starts a user turn with no run.
+    emit(turnStarted(1, { kind: 'user' }, 'injected_by_client'));
+    await sleep(5);
+    expect(calls.cancel).toBe(1);
+    // A task's result turn reuses a prompt id only by coincidence of naming:
+    // an engine-started turn is never a cancelled prompt's.
+    emit(turnStarted(2, { kind: 'task', taskId: 'bash_1', status: 'completed' }));
+    await sleep(5);
+    expect(calls.cancel).toBe(1);
+    expect(first.reason).toBe('cancelled');
   });
 
   it('ignores the tasks of child agents and of a settled run', async () => {

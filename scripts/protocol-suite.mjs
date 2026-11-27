@@ -922,6 +922,63 @@ test('malformed prompt params are rejected', async () => {
   });
 });
 
+test('a steered prompt cancelled with the run never runs as an orphan turn', async () => {
+  await withAgent(
+    {
+      // The first turn runs a command for 5s; the provider answers whatever turn
+      // reaches it afterwards with the same text, so nothing depends on which
+      // cancelled turn did or did not get as far as a model request.
+      script: [
+        { kind: 'tool', id: 'call_slow', name: 'Bash', arguments: JSON.stringify({ command: 'sleep 5; echo SLOW_DONE', description: 'slow' }) },
+        ...Array.from({ length: 4 }, () => ({ kind: 'text', text: 'LATE OUTPUT' })),
+      ],
+      delayMs: 100,
+    },
+    async ({ agent, workDir }) => {
+      await boot(agent);
+      const sessionId = await newSession(agent, workDir);
+      const first = agent.beginRequest(
+        'session/prompt',
+        { sessionId, prompt: [{ type: 'text', text: 'first' }] },
+        60_000,
+      );
+      await waitFor(() => lastText(agent).includes('slow') || hasToolCall(agent), 'the running command');
+      // Steered behind the running command: the engine ends that turn only at
+      // the next step boundary, so this prompt is still queued when the user cancels.
+      const steered = agent.beginRequest(
+        'session/prompt',
+        { sessionId, prompt: [{ type: 'text', text: 'and this' }] },
+        60_000,
+      );
+      await waitFor(() => lastText(agent).includes('steered'), 'the steer note');
+      const before = updates(agent).length;
+      agent.notify('session/cancel', { sessionId });
+      const [a, b] = await Promise.all([first.promise, steered.promise]);
+      if (a.stopReason !== 'cancelled' || b.stopReason !== 'cancelled') {
+        throw new Error(`stop reasons ${JSON.stringify([a, b])}`);
+      }
+      // The engine keeps the steered prompt for after the cancel; its turn
+      // belongs to nobody now and must be stopped, not answered.
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 4000));
+      const late = updates(agent)
+        .slice(before)
+        .filter((update) => update.sessionUpdate === 'agent_message_chunk')
+        .map((update) => update.content?.text ?? '')
+        .join('');
+      if (late.includes('LATE OUTPUT')) throw new Error(`the cancelled steered prompt ran: ${JSON.stringify(late)}`);
+      // And the session still works for the next prompt.
+      const next = await prompt(agent, sessionId, 'after the cancel', 60_000);
+      if (next.stopReason !== 'end_turn') throw new Error(`stopReason ${JSON.stringify(next)}`);
+      if (!lastText(agent).includes('LATE OUTPUT')) throw new Error('the next prompt did not answer');
+    },
+  );
+});
+
+function hasToolCall(agent) {
+  return updates(agent).some((update) => update.sessionUpdate === 'tool_call');
+}
+
+
 test('cancel then a fresh prompt works', async () => {
   await withAgent(
     { script: [{ kind: 'text', text: 'slow' }, { kind: 'text', text: 'recovered' }], delayMs: 20_000 },
@@ -1781,6 +1838,10 @@ test('a restored session whose only title is the engine placeholder gets a gener
       60_000,
     );
     await waitFor(() => provider.requests.length >= 1, 'the first model request');
+    // Mid-turn the stored title is only the placeholder; the picker must not show it.
+    const during = await agent.request('session/list', {});
+    const row = during.sessions.find((session) => session.sessionId === sessionId);
+    if (row?.title !== undefined) throw new Error(`session/list shows the placeholder: ${JSON.stringify(row?.title)}`);
     agent.notify('session/cancel', { sessionId });
     const first = await cancelled.promise;
     if (first.stopReason !== 'cancelled') throw new Error(`first stopReason ${JSON.stringify(first)}`);

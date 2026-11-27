@@ -76,6 +76,8 @@ interface Run {
   readonly resolve: (reason: StopReason) => void;
   readonly reject: (error: unknown) => void;
   settled: boolean;
+  /** The engine's id for the prompt this run owns: how a turn is told apart from an orphan. */
+  promptId?: string;
 }
 
 /** A run whose turn ended while background work it started still runs. */
@@ -113,6 +115,32 @@ export function isPublishableTitle(patch: TitlePatch | undefined, title: string 
   if (patch === undefined) return true;
   return patch.lastPrompt === undefined || patch.isCustomTitle === true;
 }
+
+/**
+ * The title a client should show for a stored session summary, if any.
+ *
+ * The engine titles a session that has none with its first prompt, cut at
+ * 200 characters (`titleFromPromptMetadataText`), and keeps that prompt as
+ * `lastPrompt`. A live or restored session says so (`titleKind` is
+ * `replaceable`); a listed one carries no kind, so the placeholder is
+ * recognized by being exactly that cut — a generated title is never the whole
+ * first 200 characters of the prompt, and a prefix match would misread short
+ * prompts whose title starts with the same words.
+ */
+export function displayTitle(summary: {
+  readonly title?: string | undefined;
+  readonly titleKind?: string | undefined;
+  readonly lastPrompt?: string | undefined;
+} | undefined): string | undefined {
+  const title = summary?.title;
+  if (typeof title !== 'string' || title.trim().length === 0) return undefined;
+  if (summary?.titleKind !== undefined) return summary.titleKind === 'replaceable' ? undefined : title;
+  const prompt = summary?.lastPrompt;
+  return typeof prompt === 'string' && title === prompt.slice(0, PLACEHOLDER_TITLE_CHARS) ? undefined : title;
+}
+
+/** The engine's `MAX_TITLE_LENGTH` for a prompt-derived title. */
+const PLACEHOLDER_TITLE_CHARS = 200;
 
 /** The background-task facts this bridge reads (`background.task.*` payloads). */
 interface BackgroundTaskInfoLike {
@@ -179,8 +207,17 @@ export class SessionBridge {
   /** A turn ended while held tasks run; settle once they are gone. */
   private deferred: DeferredSettlement | undefined;
   private deferredTimer: ReturnType<typeof setTimeout> | undefined;
-  /** A cancel settled a run before its turn started; stop that turn when it does. */
-  private stopNextTurn = false;
+  /**
+   * Prompt ids of runs cancelled before their turn ran. The engine cannot
+   * cancel a prompt with no active turn and keeps going with a queued user
+   * prompt after a cancel, so that turn still starts later — as an orphan,
+   * since its run was already answered. Recognized by id, it is stopped then.
+   */
+  private readonly cancelledPrompts = new Set<string>();
+  /** A run cancelled before the engine reported its prompt id: one, at most. */
+  private cancelledRunAwaitingId: Run | undefined;
+  /** An unowned turn that started before its cancelled run's id was known. */
+  private unownedTurnAwaitingId: { readonly promptId: string } | undefined;
 
   constructor(private readonly options: SessionBridgeOptions) {
     this.outbox = new Outbox((notification) => options.send(notification as SessionNotification));
@@ -229,13 +266,37 @@ export class SessionBridge {
    */
   steerAsRun(input: string | readonly PromptPart[]): Promise<StopReason> {
     return new Promise<StopReason>((resolve, reject) => {
-      const run: Run = { resolve, reject, settled: false };
+      // Our own id, so the turn this prompt gets can be told from any other.
+      const promptId = randomUUID();
+      const run: Run = { resolve, reject, settled: false, promptId };
       this.queuedRuns.push(run);
-      this.options.session.steer(input as string | PromptPart[]).catch((error: unknown) => {
+      this.options.session.steer(input as string | PromptPart[], { promptId }).catch((error: unknown) => {
         const index = this.queuedRuns.indexOf(run);
         if (index !== -1) this.queuedRuns.splice(index, 1);
         this.fail(run, error);
       });
+    });
+  }
+
+  /**
+   * The engine accepted a run's prompt and named it. A run cancelled while the
+   * submission was still in flight could not record that then: do it now, and
+   * stop the orphan turn if it has already started.
+   */
+  private bindPromptId(run: Run, promptId: string): void {
+    run.promptId = promptId;
+    if (!run.settled) return;
+    if (this.cancelledRunAwaitingId === run) this.cancelledRunAwaitingId = undefined;
+    this.cancelledPrompts.add(promptId);
+    if (this.unownedTurnAwaitingId?.promptId === promptId) this.stopOrphanTurn();
+  }
+
+  /** A cancelled run's turn started after all: stop it, unless a live run owns the session. */
+  private stopOrphanTurn(): void {
+    this.unownedTurnAwaitingId = undefined;
+    if (this.run !== undefined && !this.run.settled) return;
+    void this.options.session.cancel().catch((error: unknown) => {
+      log.warn('acp: cancel failed', { sessionId: this.sessionId, error: describe(error) });
     });
   }
 
@@ -387,9 +448,14 @@ export class SessionBridge {
         skill === undefined
           ? this.options.session.prompt(input as string | PromptPart[])
           : this.options.session.promptWithSkills(input as string | PromptPart[], [skill]);
-      submission.catch((error: unknown) => {
-        this.fail(run, error);
-      });
+      submission.then(
+        (accepted) => {
+          if (typeof accepted?.promptId === 'string') this.bindPromptId(run, accepted.promptId);
+        },
+        (error: unknown) => {
+          this.fail(run, error);
+        },
+      );
     });
   }
 
@@ -452,12 +518,23 @@ export class SessionBridge {
     // composer stays busy and the session looks stopped. Settle those here.
     const run = this.run;
     if (run !== undefined && !run.settled && !this.turnActive) {
-      this.stopNextTurn = true;
+      this.rememberCancelled(run);
       this.settle(run, 'cancelled');
     }
     for (const queued of this.queuedRuns.splice(0)) {
-      if (!queued.settled) this.settle(queued, 'cancelled');
+      if (queued.settled) continue;
+      this.rememberCancelled(queued);
+      this.settle(queued, 'cancelled');
     }
+  }
+
+  /** Remember a run the cancel answers without a turn, so that turn is stopped when it starts. */
+  private rememberCancelled(run: Run): void {
+    if (run.promptId === undefined) {
+      this.cancelledRunAwaitingId = run;
+      return;
+    }
+    this.cancelledPrompts.add(run.promptId);
   }
 
   async dispose(): Promise<void> {
@@ -469,7 +546,9 @@ export class SessionBridge {
     await this.outbox.drain();
     this.clearDeferred();
     this.heldTasks.clear();
-    this.stopNextTurn = false;
+    this.cancelledPrompts.clear();
+    this.cancelledRunAwaitingId = undefined;
+    this.unownedTurnAwaitingId = undefined;
     const run = this.run;
     if (run !== undefined && !run.settled) this.settle(run, 'cancelled');
     for (const queued of this.queuedRuns.splice(0)) {
@@ -530,17 +609,17 @@ export class SessionBridge {
         // A turn that started after a task ended owns the next stretch of work;
         // the grace timer must not settle the run behind its back.
         this.cancelDeferredTimer();
-        if (this.stopNextTurn) {
-          this.stopNextTurn = false;
-          // The run this turn was submitted for was cancelled before the turn
-          // started, and the engine cannot cancel a prompt with no active turn.
-          // Stop it now, unless a newer prompt owns the session: the engine
-          // queues that prompt behind this turn, and cancelling would abort
-          // the continuation it needs.
-          if (this.run === undefined) {
-            void this.options.session.cancel().catch((error: unknown) => {
-              log.warn('acp: cancel failed', { sessionId: this.sessionId, error: describe(error) });
-            });
+        // A turn nobody owns, for a prompt whose run the cancel already
+        // answered: the engine could not stop it (no active turn at the time,
+        // or a queued user prompt it keeps for after the cancel), so stop it now.
+        // One whose run's id is not known yet is decided when the id arrives.
+        if (this.run === undefined || this.run.settled) {
+          const promptId = (event as { readonly promptId?: unknown }).promptId;
+          if (typeof promptId === 'string' && this.cancelledPrompts.has(promptId)) {
+            this.cancelledPrompts.delete(promptId);
+            this.stopOrphanTurn();
+          } else if (typeof promptId === 'string' && this.cancelledRunAwaitingId !== undefined) {
+            this.unownedTurnAwaitingId = { promptId };
           }
         }
         this.messageId = undefined;

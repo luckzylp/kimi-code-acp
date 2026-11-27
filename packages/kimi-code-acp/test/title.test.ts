@@ -1,7 +1,50 @@
 import { describe, expect, it } from 'vitest';
 
-import { isPublishableTitle } from '../src/session';
-import { fallbackTitle, resolveTitleModel } from '../src/title';
+import { displayTitle, isPublishableTitle } from '../src/session';
+import { fallbackTitle, resolveTitleModel, withTitleLock } from '../src/title';
+
+describe('displayTitle', () => {
+  it('trusts the kind a live or restored session carries', () => {
+    expect(displayTitle({ title: '构建脚本工具链', titleKind: 'custom' })).toBe('构建脚本工具链');
+    expect(displayTitle({ title: '构建脚本工具链', titleKind: 'generated' })).toBe('构建脚本工具链');
+    expect(displayTitle({ title: '帮我看看构建脚本', titleKind: 'replaceable' })).toBeUndefined();
+  });
+
+  it('tells a listed placeholder by being exactly the first 200 characters of the prompt', () => {
+    const prompt = 'x'.repeat(250);
+    expect(displayTitle({ title: prompt.slice(0, 200), lastPrompt: prompt })).toBeUndefined();
+    expect(displayTitle({ title: '构建脚本工具链', lastPrompt: '帮我看看这个仓库的构建脚本' })).toBe('构建脚本工具链');
+  });
+
+  it('does not mistake a generated title that merely starts like the prompt', () => {
+    // A short prompt whose title starts with the same words is a real title.
+    expect(displayTitle({ title: '测试', lastPrompt: '测试一下登录流程' })).toBe('测试');
+  });
+
+  it('has nothing to show for an untitled session', () => {
+    expect(displayTitle(undefined)).toBeUndefined();
+    expect(displayTitle({ title: '   ' })).toBeUndefined();
+    expect(displayTitle({})).toBeUndefined();
+  });
+});
+
+describe('withTitleLock', () => {
+  it('gives up on a rename the engine never answers, and frees the lock', async () => {
+    const holder = { titleLock: Promise.resolve() };
+    const started = Date.now();
+    await expect(
+      withTitleLock(holder, () => new Promise<never>(() => undefined), 20),
+    ).rejects.toThrow(/session rename timed out/);
+    expect(Date.now() - started).toBeLessThan(500);
+    // The next rename is not stuck behind the abandoned one.
+    await expect(withTitleLock(holder, async () => 'later', 20)).resolves.toBe('later');
+  });
+
+  it('gives up on a lock whose holder never releases it', async () => {
+    const holder = { titleLock: new Promise<void>(() => undefined) };
+    await expect(withTitleLock(holder, async () => 'x', 20)).rejects.toThrow(/title lock timed out/);
+  });
+});
 
 describe('isPublishableTitle', () => {
   it('drops the engine placeholder, which is just the first prompt', () => {

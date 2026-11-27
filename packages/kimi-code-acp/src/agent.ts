@@ -90,7 +90,7 @@ import {
   type UnsubscribeRequest,
 } from './session-index';
 
-import { fallbackTitle, generateTitle } from './title';
+import { fallbackTitle, generateTitle, withTitleLock } from './title';
 import { readClientCapabilities, type ClientCapabilities } from './capabilities';
 import {
   availableBuiltinCommands,
@@ -128,7 +128,7 @@ import {
   type SteerRequest,
   type SteerResponse,
 } from './steering';
-import { SessionBridge } from './session';
+import { displayTitle, SessionBridge } from './session';
 import { toolKind } from './tool-calls';
 import { AGENT_NAME, VERSION } from './version';
 
@@ -524,11 +524,9 @@ async function loadSession(state: AgentState, params: LoadSessionRequest): Promi
   await entry.bridge.flush();
   // The stored title is published as the client's — unless it is only the
   // engine's prompt-derived placeholder, which `keepExistingTitle` also
-  // refuses to keep (see `isPublishableTitle`).
-  const title = session.summary?.title;
-  if (typeof title === 'string' && title.length > 0 && session.summary?.titleKind !== 'replaceable') {
-    await entry.bridge.publishSessionInfo(title);
-  }
+  // refuses to keep.
+  const title = displayTitle(session.summary);
+  if (title !== undefined) await entry.bridge.publishSessionInfo(title);
   const { configOptions, modes } = await surface(state, session);
   scheduleSurfaceUpdates(entry);
   log.info('acp: session loaded', { sessionId: params.sessionId, records: records.length });
@@ -564,12 +562,16 @@ export async function listSessions(state: AgentState, params: ListSessionsReques
     ...(params.cwd === undefined || params.cwd === null ? {} : { workDir: params.cwd }),
   });
   return {
-    sessions: sessions.map((summary) => ({
-      sessionId: summary.id,
-      cwd: summary.workDir,
-      ...(summary.title === undefined ? {} : { title: summary.title }),
-      updatedAt: new Date(summary.updatedAt).toISOString(),
-    })),
+    sessions: sessions.map((summary) => {
+      // A listed summary carries no `titleKind`: the placeholder is told by its text.
+      const title = displayTitle(summary);
+      return {
+        sessionId: summary.id,
+        cwd: summary.workDir,
+        ...(title === undefined ? {} : { title }),
+        updatedAt: new Date(summary.updatedAt).toISOString(),
+      };
+    }),
   };
 }
 
@@ -1132,37 +1134,15 @@ async function matchSkill(
 }
 
 /**
- * Run `rename` with this session's title lock held, so a title the user sets
- * while a generated one is being applied is always the last write.
- */
-async function withTitleLock<T>(entry: SessionEntry, rename: () => Promise<T>): Promise<T> {
-  const previous = entry.titleLock;
-  let release = (): void => undefined;
-  entry.titleLock = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  await previous;
-  try {
-    return await rename();
-  } finally {
-    release();
-  }
-}
-
-/**
  * A session restored from disk already has a title, and it is the title of the
  * conversation as a whole — not of the message the user happens to send next.
  * Marking the entry titled keeps the first prompt of a restored session from
- * renaming it. The engine's `replaceable` kind is its prompt-derived
- * placeholder (a first turn that was cancelled or failed never got a real
- * one), and that still deserves a generated title on the next completed turn.
+ * renaming it. A restored session that only carries the engine's prompt-derived
+ * placeholder (`displayTitle` says so) is untitled for us: a first turn that was
+ * cancelled or failed never got a real one, and the next completed turn earns it.
  */
 function keepExistingTitle(entry: SessionEntry): void {
-  const summary = entry.session.summary;
-  const title = summary?.title;
-  if (typeof title === 'string' && title.trim().length > 0 && summary?.titleKind !== 'replaceable') {
-    entry.titled = true;
-  }
+  if (displayTitle(entry.session.summary) !== undefined) entry.titled = true;
 }
 
 /**

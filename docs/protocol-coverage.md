@@ -144,7 +144,13 @@ for registry agents, or AIR moving to v2). Checklist:
   first turn that was cancelled) still earns a generated title. Every rename
   (`/title`, `session/set_title`, `_session/rename`, the generated one) runs
   under one per-session lock, so a title the user sets while the model is
-  still answering is the last write and always wins.
+  still answering is the last write and always wins. Both the wait for the
+  lock and the rename are bounded (10s): a rename the engine never answers
+  must not block every later one — at the price that such a rename, if it
+  lands after all, can still overwrite what was applied meanwhile.
+  `session/list` summaries carry no `titleKind`; there the placeholder is
+  recognized by being exactly the first 200 characters of `lastPrompt`
+  (`displayTitle`, used for load, restore and list alike).
 - **Projections for activity ACP has no entity for** (`src/activity.ts`):
   goals (`goal:<id>`), subagents (`subagent:<id>`), compaction notices.
 - **Replay rules** (`src/replay.ts`): injected reminders stripped, TodoList
