@@ -728,10 +728,16 @@ async function commandScenario() {
       (update) => update.sessionUpdate === 'available_commands_update',
     );
     const names = (advertisement.availableCommands ?? []).map((command) => command.name);
-    for (const expected of ['goal', 'swarm', 'compact', 'status', 'permission', 'model', 'effort']) {
+    for (const expected of ['goal', 'swarm', 'compact', 'status', 'permission']) {
       if (!names.includes(expected)) throw new Error(`command "${expected}" is not advertised`);
     }
-    ok(`${String(names.length)} commands advertised (built-ins + skills/plugins)`);
+    for (const hidden of ['model', 'effort', 'plugins', 'add-dir', 'plan', 'yolo', 'auto']) {
+      if (names.includes(hidden)) throw new Error(`command "${hidden}" should not be advertised`);
+    }
+    for (const name of names) {
+      if (name.includes(':')) throw new Error(`plugin command ${name} should not be advertised`);
+    }
+    ok(`${String(names.length)} commands advertised (built-ins + skills)`);
 
     const status = await agent.request(
       'session/prompt',
