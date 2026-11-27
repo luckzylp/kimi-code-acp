@@ -1986,7 +1986,7 @@ test('a prompt steered while a run is held by an auto-backgrounded command settl
 });
 
 
-test('a long shell command keeps its full text in the card body', async () => {
+test('a long shell command keeps its full text in the card title', async () => {
   const longDir = '/data/project/OrderProductionCollaborationSystem/packages/backend/src';
   const command = `cd ${longDir} && ls -la`;
   await withAgent(
@@ -2000,12 +2000,16 @@ test('a long shell command keeps its full text in the card body', async () => {
       );
       if (card === undefined) throw new Error('no tool card');
       if (card.title !== command) throw new Error(`title is ${JSON.stringify(card.title)}`);
-      const text = (card.content ?? [])
-        .filter((entry) => entry.type === 'content')
-        .map((entry) => entry.content?.text ?? '')
-        .join('');
-      if (!text.includes(command)) throw new Error(`the card body lost the command: ${JSON.stringify(text)}`);
-      if (!text.includes('ls -la')) throw new Error('the card body is truncated');
+      if (!card.title.includes('ls -la')) throw new Error('the title is truncated');
+      // A card with a display terminal carries the terminal only: the output
+      // renders in it, and a text block beside it would replace it later.
+      const kinds = (card.content ?? []).map((entry) => entry.type);
+      if (kinds.join(',') !== 'terminal') throw new Error(`card content is ${JSON.stringify(kinds)}`);
+      // The result update carries the exit status, never a text replacement.
+      const result = updates(agent).find(
+        (update) => update.sessionUpdate === 'tool_call_update' && update.toolCallId === '0:call_long' && update.content !== undefined,
+      );
+      if (result !== undefined) throw new Error(`a result update replaced the terminal: ${JSON.stringify(result)}`);
     },
   );
 });

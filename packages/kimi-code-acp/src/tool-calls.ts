@@ -296,10 +296,12 @@ export class ToolCalls {
     };
     this.calls.set(event.toolCallId, call);
 
-    const content = startContent(event);
-    if (terminalId !== undefined) {
-      content.unshift({ type: 'terminal', terminalId });
-    }
+    // A call with a display terminal carries the terminal and nothing else.
+    // `content` in an update *replaces* the collection (ACP schema), so any
+    // text block sent beside it would drop the terminal on the next update and
+    // leave the output as prose. The command is the card's title already.
+    const content: ToolCallContent[] =
+      terminalId === undefined ? startContent(event) : [{ type: 'terminal', terminalId }];
     this.emit({
       sessionId: this.options.sessionId,
       update: {
@@ -376,13 +378,18 @@ export class ToolCalls {
               signal: call.signal ?? null,
             },
           };
+    // Same replacement rule: a terminal card keeps its terminal, and the
+    // output arrives through `_meta.terminal_output`; a card without one gets
+    // the result as text (fenced for a command, so it reads like the command).
+    const content =
+      call.terminalId === undefined ? resultContent(event.output, { codeBlock: call.kind === 'execute' }) : [];
     this.emit({
       sessionId: this.options.sessionId,
       update: {
         sessionUpdate: 'tool_call_update',
         toolCallId: call.acpId,
         status,
-        content: resultContent(event.output, { codeBlock: call.kind === 'execute' }),
+        ...(content.length === 0 ? {} : { content }),
         rawOutput: event.output,
         ...(Object.keys(meta).length === 0 ? {} : { _meta: meta }),
       },
@@ -454,6 +461,9 @@ export class ToolCalls {
     }
     if (call.argsText.length === call.argsLengthAtFlush) return;
     call.argsLengthAtFlush = call.argsText.length;
+    // The terminal owns the content of a command card; replacing it with the
+    // streaming arguments would take the running output off the screen.
+    if (call.terminalId !== undefined) return;
     this.emit({
       sessionId: this.options.sessionId,
       update: {

@@ -129,6 +129,11 @@ for registry agents, or AIR moving to v2). Checklist:
   that reports the command's result (`run_in_background` tasks never hold it;
   a prompt steered in meanwhile takes the session). Engine-started
   continuations are separate turns and are introduced by a one-line note.
+- **Tool card content**: a command card carries its display terminal and
+  nothing else — `content` in a `tool_call_update` **replaces** the collection,
+  so a text block sent later (streamed arguments, the result) would take the
+  terminal off the card and leave the output as prose. Cards without a terminal
+  get the result as fenced text.
 - **Session titles**: the engine names an untitled session after its first
   prompt (a `session.meta.updated` placeholder carrying `lastPrompt`); the
   adapter does not publish that, so a thread is never named after the user's
