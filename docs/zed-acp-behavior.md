@@ -82,6 +82,15 @@ Two practical consequences the suite checks:
   the adapter always includes `messageId` and text content;
 - an update kind the client does not model must not disturb later updates.
 
+## Cursors and rewind
+
+Zed 1.29.3 does not declare `session.cursors`; AIR does. The adapter follows the
+RFD: an `cursor_update` per user prompt, anchored to the previous entity with
+`position: "after"` for live prompts (v1 never echoes the client's prompt) and
+to the replayed message with `position: "before"` after a load. A cursor
+advertises `capabilities.rewind` for clients that also implement
+`_session/rewind`.
+
 ## What this means for the adapter
 
 1. Keep the v1 terminal contract exactly (`terminal_info` on the card,

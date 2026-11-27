@@ -23,6 +23,7 @@ import {
   forkSession,
   goalRequest,
   harnessOf,
+  rewindRequest,
   listSessions,
   logout,
   newSession,
@@ -34,6 +35,7 @@ import {
 } from './agent';
 import { LOGIN_METHOD_ID } from './auth';
 import { GOAL_METHOD, parseGoalRequest } from './goal-extension';
+import { parseRewindRequest, REWIND_METHOD } from './rewind';
 import { log } from './log';
 import { listProviders } from './providers';
 import { McpBridge } from './mcp-bridge';
@@ -73,6 +75,7 @@ export function createV2App(state: AgentState): { app: v2.AgentApp } {
     .onRequest('auth/logout', (context) => logout(state, context.params as never))
     .onRequest(STEER_METHOD, parseSteerRequest, (context) => steerRequest(state, context.params))
     .onRequest(GOAL_METHOD, parseGoalRequest, (context) => goalRequest(state, context.params) as never)
+    .onRequest(REWIND_METHOD, parseRewindRequest, (context) => rewindRequest(state, context.params) as never)
     .onNotification('mcp/message', (context) => {
       // Server-initiated MCP traffic: hand it to the bridge that owns the
       // connection so the proxy can write it to the engine's MCP client.

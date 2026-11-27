@@ -84,7 +84,13 @@ import { log } from './log';
 import { listProviders } from './providers';
 import { McpBridge } from './mcp-bridge';
 import { buildPrompt } from './prompt';
-import { projectReplay, type ReplayRecord } from './replay';
+import { projectReplay, replayedUserMessageIds, type ReplayRecord } from './replay';
+import {
+  parseRewindRequest,
+  REWIND_METHOD,
+  type RewindRequest,
+  type RewindResponse,
+} from './rewind';
 import { toV2Updates } from './v2-updates';
 import {
   parseSteerRequest,
@@ -173,6 +179,7 @@ export function createAgentApp(
     .onRequest('session/set_mode', (context) => setMode(state, context.params))
     .onRequest(STEER_METHOD, parseSteerRequest, (context) => steerRequest(state, context.params))
     .onRequest(GOAL_METHOD, parseGoalRequest, (context) => goalRequest(state, context.params))
+    .onRequest(REWIND_METHOD, parseRewindRequest, (context) => rewindRequest(state, context.params))
     .onRequest('session/set_config_option', (context) => setConfigOption(state, context.params))
     .onRequest('session/prompt', (context) => prompt(state, context.params, context.signal))
     .onNotification('session/cancel', (context) => {
@@ -375,6 +382,7 @@ async function registerSession(state: AgentState, session: KimiSession): Promise
     shadowTerminals: state.capabilities.terminalOutput || v2 !== undefined,
     terminalOutputDelta: state.capabilities.terminalOutputDelta,
     promptSuggestions: state.capabilities.promptSuggestions,
+    cursors: state.capabilities.cursors,
     send: async (notification) => {
       if (client !== undefined) {
         await client.notify(methods.client.session.update, notification);
@@ -441,6 +449,10 @@ async function loadSession(state: AgentState, params: LoadSessionRequest): Promi
   const records = (session.getResumeState()?.agents?.['main']?.replay ?? []) as unknown as ReplayRecord[];
   for (const notification of projectReplay(params.sessionId, records)) {
     await entry.bridge.post(notification);
+  }
+  // Replayed user messages are rewindable too.
+  for (const messageId of replayedUserMessageIds(records)) {
+    entry.bridge.trackUserMessage(messageId);
   }
   await entry.bridge.flush();
   const { configOptions, modes } = await surface(state, session);
@@ -608,6 +620,30 @@ export async function steerRequest(state: AgentState, params: SteerRequest): Pro
   }
   await entry.bridge.steer(built.parts);
   return { outcome: 'injected' };
+}
+
+/**
+ * `_session/rewind`: drop the user message a cursor lies before, and
+ * everything after it, by undoing one engine turn per dropped message.
+ */
+export async function rewindRequest(
+  state: AgentState,
+  params: RewindRequest,
+): Promise<RewindResponse> {
+  const entry = state.sessions.get(params.sessionId);
+  if (entry === undefined) throw RequestError.invalidParams(undefined, 'unknown session');
+  if (entry.bridge.isBusy()) return { rewound: false, reason: 'busy' };
+  const index = entry.bridge.rewindIndex(params.cursorId);
+  if (index === undefined) {
+    throw RequestError.invalidParams(undefined, `unknown cursor: ${params.cursorId}`);
+  }
+  const count = entry.bridge.userMessageCount() - index;
+  if (count > 0) {
+    await entry.session.undoHistory(count);
+    entry.bridge.truncateUserMessages(index);
+  }
+  log.info('acp: session rewound', { sessionId: params.sessionId, cursorId: params.cursorId, count });
+  return { rewound: true };
 }
 
 /** `_session/goal`: set or clear the session's goal (AIR extension). */

@@ -37,7 +37,8 @@ import { TextCoalescer } from './coalesce';
 import { describeEngineTurn } from './engine-turn';
 import { log } from './log';
 import { Outbox } from './outbox';
-import { ToolCalls } from './tool-calls';
+import { cursorUpdate, liveCursorUpdate, messageIdOfCursor, type CursorEntity } from './rewind';
+import { acpToolCallId, ToolCalls } from './tool-calls';
 
 /** The ACP stop reason for an engine turn end (mirrors the upstream mapping). */
 function turnStopReason(
@@ -71,6 +72,8 @@ export interface SessionBridgeOptions {
   readonly terminalOutputDelta?: boolean;
   /** The client renders a predicted next prompt (`session.promptSuggestions`). */
   readonly promptSuggestions?: boolean;
+  /** The client accepts `cursor_update` and may rewind (`session.cursors`). */
+  readonly cursors?: boolean;
   readonly send: (notification: SessionNotification) => Promise<void> | void;
 }
 
@@ -83,6 +86,10 @@ export class SessionBridge {
   private run: Run | undefined;
   /** The last turn id the engine reported, for `predictNextPrompt`. */
   private lastTurnId: number | undefined;
+  /** User message ids in order, for cursor announcements and rewind. */
+  private readonly userMessageIds: string[] = [];
+  /** The last entity the client holds, for anchoring live cursors. */
+  private lastEntity: CursorEntity | undefined;
   private disposed = false;
   private messageId: string | undefined;
   /** The goal currently on screen, so changes update its card instead of adding one. */
@@ -126,6 +133,35 @@ export class SessionBridge {
   /** Inject a message into the running turn (ACP `_session/steering`). */
   async steer(parts: readonly PromptPart[]): Promise<void> {
     await this.options.session.steer(parts as PromptPart[]);
+  }
+
+  /** Record a user message and announce a rewind cursor for it. */
+  trackUserMessage(messageId: string, anchor?: CursorEntity): void {
+    if (messageId.length === 0 || this.userMessageIds.includes(messageId)) return;
+    this.userMessageIds.push(messageId);
+    if (this.options.cursors !== true || this.disposed) return;
+    void this.post(
+      anchor === undefined
+        ? cursorUpdate(this.options.sessionId, messageId)
+        : liveCursorUpdate(this.options.sessionId, messageId, anchor),
+    );
+  }
+
+  /** The index of the user message a cursor lies before, if it names one. */
+  rewindIndex(cursorId: string): number | undefined {
+    const messageId = messageIdOfCursor(cursorId);
+    if (messageId === undefined) return undefined;
+    const index = this.userMessageIds.indexOf(messageId);
+    return index === -1 ? undefined : index;
+  }
+
+  userMessageCount(): number {
+    return this.userMessageIds.length;
+  }
+
+  /** Forget the messages from `index` on after they were undone. */
+  truncateUserMessages(index: number): void {
+    this.userMessageIds.length = Math.max(0, index);
   }
 
   /** The goal whose card is currently on screen, if any. */
@@ -240,6 +276,19 @@ export class SessionBridge {
 
   private handleEvent(event: Event): void {
     if (process.env['KIMI_ACP_EVENTS'] === '1') log.info('acp: engine event', { type: event.type });
+    // `turn.prompt` names the engine prompt that just started; the SDK's Event
+    // union does not list it, but the engine emits it (and it carries the id a
+    // cursor needs).
+    if ((event.type as string) === 'turn.prompt') {
+      const prompt = event as unknown as {
+        readonly origin?: { readonly kind?: string };
+        readonly promptId?: string;
+      };
+      if ((prompt.origin === undefined || prompt.origin.kind === 'user') && this.lastEntity !== undefined) {
+        this.trackUserMessage(prompt.promptId ?? randomUUID(), this.lastEntity);
+      }
+      return;
+    }
     switch (event.type) {
       case 'turn.started': {
         this.messageId = undefined;
@@ -270,6 +319,7 @@ export class SessionBridge {
           if (plan !== null) void this.outbox.push(plan);
         }
         this.toolCalls.started(event);
+        this.lastEntity = { type: 'tool_call', toolCallId: acpToolCallId(event.turnId, event.toolCallId) };
         return;
       }
       case 'tool.call.delta': {
@@ -301,9 +351,15 @@ export class SessionBridge {
         this.settle(run, turnStopReason(event.reason, event.error));
         return;
       }
-      case 'prompt.submitted':
+      case 'prompt.submitted': {
+        // Only a prompt the user typed gets a rewind cursor.
+        const origin = event.origin as { readonly kind?: string } | undefined;
+        if ((origin === undefined || origin.kind === 'user') && typeof event.userMessageId === 'string') {
+          this.trackUserMessage(event.userMessageId);
+        }
+        return;
+      }
       case 'prompt.steered': {
-        // Steering or queueing folds work into the run; the turn's end settles it.
         return;
       }
       case 'prompt.completed': {
@@ -490,6 +546,9 @@ export class SessionBridge {
 
   private emitText(kind: 'agent_message_chunk' | 'agent_thought_chunk', text: string): void {
     this.messageId ??= randomUUID();
+    if (kind === 'agent_message_chunk') {
+      this.lastEntity = { type: 'agent_message', messageId: this.messageId };
+    }
     void this.outbox.push({
       sessionId: this.options.sessionId,
       update: { sessionUpdate: kind, content: { type: 'text', text }, messageId: this.messageId },

@@ -19,6 +19,8 @@ export interface ClientCapabilities {
   readonly fsWrite: boolean;
   /** `session.promptSuggestions`: the client renders a predicted next prompt. */
   readonly promptSuggestions: boolean;
+  /** `session.cursors`: the client accepts `cursor_update` and may rewind. */
+  readonly cursors: boolean;
 }
 
 const NONE: ClientCapabilities = {
@@ -28,6 +30,7 @@ const NONE: ClientCapabilities = {
   fsRead: false,
   fsWrite: false,
   promptSuggestions: false,
+  cursors: false,
 };
 
 type CapabilitiesCarrier =
@@ -47,7 +50,10 @@ function metaFlag(meta: Record<string, unknown> | null | undefined, key: string)
 export function readClientCapabilities(capabilities: CapabilitiesCarrier): ClientCapabilities {
   const meta = capabilities?._meta;
   const delta = metaFlag(meta, 'terminal_output_delta');
-  const session = capabilities?.session as { readonly promptSuggestions?: unknown } | null | undefined;
+  const session = capabilities?.session as
+    | { readonly promptSuggestions?: unknown; readonly cursors?: unknown }
+    | null
+    | undefined;
   return {
     terminalOutput: delta || metaFlag(meta, 'terminal_output'),
     terminalOutputDelta: delta,
@@ -55,5 +61,6 @@ export function readClientCapabilities(capabilities: CapabilitiesCarrier): Clien
     fsRead: capabilities?.fs?.readTextFile === true,
     fsWrite: capabilities?.fs?.writeTextFile === true,
     promptSuggestions: session?.promptSuggestions != null,
+    cursors: session?.cursors != null,
   };
 }

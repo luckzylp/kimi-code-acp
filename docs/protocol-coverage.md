@@ -33,6 +33,7 @@ advertised** — the capability flag is never set, so a client does not call it;
 | `$/cancel_request` | implemented | the SDK aborts the request signal; the handler cancels the run |
 | `_session/steering` (extension) | implemented | injects into the running turn; `startedNewTurn` when idle; `promptRequired` opt-in; advertised via `initialize._meta.steering` |
 | `_session/goal` (AIR extension) | implemented | `set` creates/replaces the engine goal, `clear` cancels it and closes the goal card; served on v1 and v2 |
+| `_session/rewind` (AIR extension) | implemented | drops the user message a cursor names and everything after it (`undoHistory` per dropped turn); `{rewound:false,reason:'busy'}` mid-run; unknown cursors are rejected |
 | `nes/start`, `nes/suggest`, `nes/close` | not advertised | next-edit suggestions are not a chat agent feature |
 
 ## ACP v2 (experimental draft)
@@ -80,6 +81,7 @@ opens the v1 or the v2 app. v2 requests delegate to the same session machinery;
 | `session_info_update` | implemented | engine-generated titles (`session.meta.updated`) |
 | `usage_update` | implemented | after setup, each turn end, and configuration changes |
 | `prompt_suggestions_update` | implemented | after each turn when the client advertises `session.promptSuggestions` and the engine's `prompt_prediction` experiment is on; empty list clears |
+| `cursor_update` | implemented | one per user prompt when the client advertises `session.cursors`; live prompts anchor after the previous entity, replayed ones before their message |
 
 ## Beyond the wire
 

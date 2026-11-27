@@ -954,6 +954,88 @@ test('session/new accepts additional directories', async () => {
   });
 });
 
+
+// --- cursors and rewind ----------------------------------------------------
+
+test('cursors are announced and rewind drops the turn', async () => {
+  await withAgent(
+    {
+      script: [
+        { kind: 'text', text: 'first answer' },
+        { kind: 'text', text: 'second answer' },
+        { kind: 'text', text: 'third answer' },
+      ],
+    },
+    async ({ agent, provider, workDir }) => {
+      const capabilities = zedCapabilities();
+      capabilities.session.cursors = {};
+      await boot(agent, { capabilities });
+      const sessionId = await newSession(agent, workDir);
+      await prompt(agent, sessionId, 'first question');
+      await prompt(agent, sessionId, 'second question');
+
+      const cursors = updates(agent).filter((update) => update.sessionUpdate === 'cursor_update');
+      // The first prompt has no earlier entity to anchor to, so the second
+      // prompt yields the first rewindable cursor (as in Clauck Code's v1 core).
+      if (cursors.length < 1) throw new Error('no rewind cursor was announced');
+      for (const cursor of cursors) {
+        if (cursor.anchor?.type === undefined) throw new Error('cursor carries no anchor');
+        if (!['before', 'after'].includes(cursor.anchor.position)) {
+          throw new Error(`unexpected cursor position: ${cursor.anchor.position}`);
+        }
+        if (cursor.capabilities?.rewind === undefined) throw new Error('cursor does not announce rewind');
+      }
+
+      const rewound = await agent.request('_session/rewind', {
+        sessionId,
+        cursorId: cursors[0].cursorId,
+      });
+      if (rewound.rewound !== true) throw new Error(`rewind answered ${JSON.stringify(rewound)}`);
+
+      await prompt(agent, sessionId, 'third question');
+      const body = provider.requests.at(-1)?.body ?? '';
+      if (!body.includes('third question')) throw new Error('the new prompt did not reach the model');
+      if (body.includes('second question')) throw new Error('the rewound message is still in the context');
+      if (body.includes('second answer')) throw new Error('the rewound answer is still in the context');
+
+      await expectReject(
+        agent.request('_session/rewind', { sessionId, cursorId: 'before:no-such-message' }),
+        'an unknown cursor',
+      );
+    },
+  );
+});
+
+test('rewind while a run is active reports busy', async () => {
+  await withAgent(
+    { script: [{ kind: 'text', text: 'slow' }, { kind: 'text', text: 'next' }], delayMs: 20_000 },
+    async ({ agent, workDir }) => {
+      const capabilities = zedCapabilities();
+      capabilities.session.cursors = {};
+      await boot(agent, { capabilities });
+      const sessionId = await newSession(agent, workDir);
+      await prompt(agent, sessionId, 'first');
+      const running = agent.request(
+        'session/prompt',
+        { sessionId, prompt: [{ type: 'text', text: 'second' }] },
+        60_000,
+      );
+      await waitFor(
+        () => updates(agent).some((update) => update.sessionUpdate === 'cursor_update'),
+        'a cursor for the second prompt',
+      );
+      const cursor = updates(agent).find((update) => update.sessionUpdate === 'cursor_update');
+      if (cursor === undefined) throw new Error('no cursor for the second message');
+      const rewound = await agent.request('_session/rewind', { sessionId, cursorId: cursor.cursorId });
+      if (rewound.rewound !== false || rewound.reason !== 'busy') {
+        throw new Error(`rewind answered ${JSON.stringify(rewound)}`);
+      }
+      agent.notify('session/cancel', { sessionId });
+      await running;
+    },
+  );
+});
+
 // --- runner ----------------------------------------------------------------
 
 for (const { name, run } of cases) {

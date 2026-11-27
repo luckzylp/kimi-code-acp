@@ -64,6 +64,12 @@ verified end to end.** Present today:
   prompt and it is published as `prompt_suggestions_update` — gated on the
   client advertising `session.promptSuggestions` and on the engine's
   `prompt_prediction` experiment (`KIMI_CODE_EXPERIMENTAL_PROMPT_PREDICTION=1`)
+- **cursors and rewind**: clients that declare `session.cursors` get a
+  `cursor_update` per user prompt (live prompts anchor after the previous
+  entity, replayed ones before the message); `_session/rewind` drops the
+  message and everything after it by undoing one engine turn per dropped
+  message, returns `{rewound:false,reason:'busy'}` mid-run, and rejects
+  unknown cursors
 - **goal control**: the AIR `_session/goal` extension (`set` / `clear`) drives the
   engine's goal and keeps the goal card in sync with `/goal`
 - **steering**: the `_session/steering` extension injects a follow-up into the

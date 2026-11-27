@@ -81,6 +81,15 @@ const updates: Array<[string, Record<string, unknown>]> = [
   ['session_info_update', { sessionUpdate: 'session_info_update', title: 'A title' }],
   ['usage_update', { sessionUpdate: 'usage_update', used: 10, size: 100 }],
   [
+    'cursor_update',
+    {
+      sessionUpdate: 'cursor_update',
+      cursorId: 'before:m1',
+      anchor: { type: 'user_message', messageId: 'm1', position: 'before' },
+      capabilities: { fork: {}, rewind: {} },
+    },
+  ],
+  [
     'prompt_suggestions_update',
     {
       sessionUpdate: 'prompt_suggestions_update',

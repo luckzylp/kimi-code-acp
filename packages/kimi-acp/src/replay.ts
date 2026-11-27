@@ -42,6 +42,7 @@ interface ReplayMessage {
   readonly role: string;
   readonly content: readonly ReplayPart[];
   readonly origin?: unknown;
+  readonly id?: string;
   readonly toolCalls?: readonly ReplayToolCall[];
   readonly toolCallId?: string;
   readonly isError?: boolean;
@@ -115,7 +116,7 @@ export function projectReplay(
         continue;
       }
       const speech = stripInjectedMarkers(text).trim();
-      if (speech.length > 0) out.push(userChunk(sessionId, speech));
+      if (speech.length > 0) out.push(userChunk(sessionId, speech, message.id));
       continue;
     }
     if (message.role === 'assistant') {
@@ -151,8 +152,30 @@ function textOf(content: readonly ReplayPart[]): string | undefined {
   return text.length === 0 ? undefined : text;
 }
 
-function userChunk(sessionId: string, text: string): SessionNotification {
-  return { sessionId, update: { sessionUpdate: 'user_message_chunk', content: { type: 'text', text } } };
+function userChunk(sessionId: string, text: string, messageId?: string): SessionNotification {
+  return {
+    sessionId,
+    update: {
+      sessionUpdate: 'user_message_chunk',
+      ...(messageId === undefined ? {} : { messageId }),
+      content: { type: 'text', text },
+    },
+  };
+}
+
+/** Ids of the user prompts in a replay, in order, for cursor announcements. */
+export function replayedUserMessageIds(records: readonly ReplayRecord[]): string[] {
+  const ids: string[] = [];
+  for (const record of records) {
+    if (record.type !== 'message' || record.message === undefined) continue;
+    const message = record.message;
+    if (message.role !== 'user') continue;
+    if (!isAutonomousOrigin(message.origin)) {
+      const id = message.id;
+      if (typeof id === 'string' && id.length > 0) ids.push(id);
+    }
+  }
+  return ids;
 }
 
 function assistantPart(sessionId: string, part: ReplayPart): SessionNotification | null {
