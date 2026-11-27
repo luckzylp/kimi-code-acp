@@ -162,7 +162,10 @@ Rules:
    one), a cancelled run's id is remembered, and such a turn is stopped when
    it starts — matched by id, never by origin or timing, so an injected
    `_session/steering` turn or a task's result turn is left alone, and a turn
-   that starts before the id is known is decided when it arrives.
+   that starts before the id is known is decided when it arrives (any number
+   of unowned turns that start in that window are kept, and the remembered ids
+   are capped — a cancelled prompt's turn starts within moments, so a session
+   cancelled over and over cannot grow the set without bound).
 6. A prompt that arrives mid-run is **queued, never rejected**. Engine 2.8's
    `session.steer()` emits `prompt.queued`, ends the running turn at the step
    boundary (reported `completed`) and runs the message as the **next turn**;

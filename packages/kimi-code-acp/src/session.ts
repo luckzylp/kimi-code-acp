@@ -144,6 +144,13 @@ export function displayTitle(summary: {
 /** The engine's `MAX_TITLE_LENGTH` for a prompt-derived title. */
 const PLACEHOLDER_TITLE_CHARS = 200;
 
+/**
+ * How many cancelled prompt ids to keep waiting for. A cancelled prompt's turn
+ * starts within moments of the cancel; keeping the last few is ample, and it
+ * keeps a session that is cancelled over and over bounded.
+ */
+const MAX_CANCELLED_PROMPTS = 16;
+
 /** The background-task facts this bridge reads (`background.task.*` payloads). */
 interface BackgroundTaskInfoLike {
   readonly taskId?: unknown;
@@ -218,8 +225,12 @@ export class SessionBridge {
   private readonly cancelledPrompts = new Set<string>();
   /** A run cancelled before the engine reported its prompt id: one, at most. */
   private cancelledRunAwaitingId: Run | undefined;
-  /** An unowned turn that started before its cancelled run's id was known. */
-  private unownedTurnAwaitingId: { readonly promptId: string } | undefined;
+  /**
+   * Unowned turns that started while a cancelled run's id was still unknown.
+   * Any number of them can start in that window (an injected `_session/steering`
+   * turn, the cancelled prompt's own); the one whose id matches is the orphan.
+   */
+  private readonly unownedTurnsAwaitingId = new Set<string>();
 
   constructor(private readonly options: SessionBridgeOptions) {
     this.outbox = new Outbox((notification) => options.send(notification as SessionNotification));
@@ -291,13 +302,15 @@ export class SessionBridge {
     // orphan: its turn already ran (or is running) and belongs to nobody.
     if (!run.settled || run.cancelled !== true) return;
     if (this.cancelledRunAwaitingId === run) this.cancelledRunAwaitingId = undefined;
-    this.cancelledPrompts.add(promptId);
-    if (this.unownedTurnAwaitingId?.promptId === promptId) this.stopOrphanTurn();
+    this.rememberCancelledPrompt(promptId);
+    const wasUnowned = this.unownedTurnsAwaitingId.delete(promptId);
+    // The id is known now, so no turn starting from here can belong to it.
+    this.unownedTurnsAwaitingId.clear();
+    if (wasUnowned) this.stopOrphanTurn();
   }
 
   /** A cancelled run's turn started after all: stop it, unless a live run owns the session. */
   private stopOrphanTurn(): void {
-    this.unownedTurnAwaitingId = undefined;
     if (this.run !== undefined && !this.run.settled) return;
     void this.options.session.cancel().catch((error: unknown) => {
       log.warn('acp: cancel failed', { sessionId: this.sessionId, error: describe(error) });
@@ -539,7 +552,21 @@ export class SessionBridge {
       this.cancelledRunAwaitingId = run;
       return;
     }
-    this.cancelledPrompts.add(run.promptId);
+    this.rememberCancelledPrompt(run.promptId);
+  }
+
+  /**
+   * Keep a cancelled prompt id until its turn starts. The wait is short, so the
+   * set is capped: a session cancelled over and over without its turns ever
+   * starting must not grow it without bound.
+   */
+  private rememberCancelledPrompt(promptId: string): void {
+    this.cancelledPrompts.add(promptId);
+    while (this.cancelledPrompts.size > MAX_CANCELLED_PROMPTS) {
+      const oldest = this.cancelledPrompts.values().next().value;
+      if (oldest === undefined) return;
+      this.cancelledPrompts.delete(oldest);
+    }
   }
 
   async dispose(): Promise<void> {
@@ -553,7 +580,7 @@ export class SessionBridge {
     this.heldTasks.clear();
     this.cancelledPrompts.clear();
     this.cancelledRunAwaitingId = undefined;
-    this.unownedTurnAwaitingId = undefined;
+    this.unownedTurnsAwaitingId.clear();
     const run = this.run;
     if (run !== undefined && !run.settled) this.settle(run, 'cancelled');
     for (const queued of this.queuedRuns.splice(0)) {
@@ -622,9 +649,11 @@ export class SessionBridge {
           const promptId = (event as { readonly promptId?: unknown }).promptId;
           if (typeof promptId === 'string' && this.cancelledPrompts.has(promptId)) {
             this.cancelledPrompts.delete(promptId);
+            // Its id is known, so no turn starting from here belongs to it.
+            this.unownedTurnsAwaitingId.clear();
             this.stopOrphanTurn();
           } else if (typeof promptId === 'string' && this.cancelledRunAwaitingId !== undefined) {
-            this.unownedTurnAwaitingId = { promptId };
+            this.unownedTurnsAwaitingId.add(promptId);
           }
         }
         this.messageId = undefined;
@@ -984,6 +1013,9 @@ export class SessionBridge {
   }
 
   private fail(run: Run, error: unknown): void {
+    // The engine refused the submission: the turn the cancel is waiting to stop
+    // will never start, so stop waiting for its id.
+    if (this.cancelledRunAwaitingId === run) this.cancelledRunAwaitingId = undefined;
     if (run.settled) return;
     run.settled = true;
     this.release(run);

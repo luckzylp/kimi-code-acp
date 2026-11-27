@@ -398,6 +398,34 @@ describe('a run and the background work its turn started', () => {
     expect(calls.cancel).toBe(0);
   });
 
+  it('keeps every turn that starts while the cancelled id is unknown, and stops the right one', async () => {
+    let accept!: (value: { promptId: string }) => void;
+    const { bridge, emit, calls } = bridgeWith(5, {
+      prompt: () =>
+        new Promise<{ promptId: string }>((resolve) => {
+          accept = resolve;
+        }),
+    });
+    const first = observe(bridge.prompt('do it') as Promise<string>);
+    bridge.cancel();
+    await sleep(5);
+    expect(first.reason).toBe('cancelled');
+    // The cancelled prompt's turn starts, then another unowned turn does (an
+    // injected `_session/steering` message). Neither id is known to be the
+    // cancelled one yet, so both are kept; the first of them is the orphan.
+    emit(turnStarted(1, { kind: 'user' }, 'prompt_cancelled'));
+    emit(turnStarted(2, { kind: 'user' }, 'prompt_injected'));
+    expect(calls.cancel).toBe(1);
+    accept({ promptId: 'prompt_cancelled' });
+    await sleep(5);
+    expect(calls.cancel).toBe(2);
+    // The injected turn is not the cancelled one: a second id arriving must not
+    // stop it, and the remembered set is cleared once the id is resolved.
+    emit(turnStarted(3, { kind: 'user' }, 'prompt_injected'));
+    await sleep(5);
+    expect(calls.cancel).toBe(2);
+  });
+
   it('leaves a user turn alone that no cancelled run owns', async () => {
     const { bridge, emit, calls } = bridgeWith();
     const first = observe(bridge.prompt('do it') as Promise<string>);
