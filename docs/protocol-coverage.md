@@ -64,6 +64,33 @@ opens the v1 or the v2 app. v2 requests delegate to the same session machinery;
 | `nes/*`, `document/*` | not advertised / ignored | editor features a chat agent does not use |
 | updates | translated | message chunks, `tool_call_update`, `terminal_update`, `terminal_output_chunk`, `plan_update`, commands/config/info/usage passthrough; unknown kinds dropped |
 
+### v2 upgrade trigger and checklist
+
+The v2 app is pinned to the **1.3.0 draft** through the `@agentclientprotocol/sdk-v1`
+alias while v1 runs the 2.12 unstable surface. The two drafts disagree in ways
+that make a blind bump a rewrite:
+
+- 2.12's v2 renamed request/response types and dropped `mcp/connect`; the 1.3
+  app's `initialize` parser also drops `session.promptSuggestions` (why v2 has
+  no prompt suggestions here).
+- The adapter relies on the 1.3 shapes for `mcp/message` (both a notification
+  and a request), `document/*` notifications, and `PromptResponse` with no
+  fields.
+
+Upgrade when a client requires the newer v2 shape (Zed enabling v2 transport
+for registry agents, or AIR moving to v2). Checklist:
+
+1. Bump `@agentclientprotocol/sdk-v1` to the matching alias and fix the
+   `v2.ts` handlers by compiler error (method renames, `mcp/message` request
+   removal, `session/prompt` response fields).
+2. Re-check `src/v2-updates.ts` against the new `SessionUpdate` union; the
+   translator drops unknown kinds silently by design, so add a contract test
+   per kind it should pass through (`v2-contract.test.ts`).
+3. Re-read `clientCapabilities` mapping: prompt suggestions may become
+   available again; subagent support is always-on in v2.
+4. Re-run `node scripts/protocol-suite.mjs 'v2'` plus the whole suite; the v2
+   cases pin negotiation, config, steering, goal, lifecycle and errors.
+
 ## Client methods the agent calls
 
 | Method | Status | Notes |
