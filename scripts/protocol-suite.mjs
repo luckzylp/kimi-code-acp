@@ -541,6 +541,419 @@ test('v2 document notifications are ignored', async () => {
   });
 });
 
+
+// --- session positive paths ------------------------------------------------
+
+test('session/load replays history and accepts a prompt', async () => {
+  const provider = await startFakeProvider({
+    script: [{ kind: 'text', text: 'first answer' }, { kind: 'text', text: 'resumed answer' }],
+  });
+  const homeDir = writeFakeHome({ baseUrl: provider.baseUrl });
+  const workDir = mkdtempSync(join(tmpdir(), 'kimi-acp-suite-'));
+  let sessionId;
+  const first = spawnAgent(mainPath, { homeDir, env: { KIMI_ACP_DEBUG: '1' } });
+  try {
+    await boot(first);
+    sessionId = await newSession(first, workDir);
+    await prompt(first, sessionId, 'first question');
+  } finally {
+    await first.close();
+  }
+  const second = spawnAgent(mainPath, { homeDir, env: { KIMI_ACP_DEBUG: '1' } });
+  try {
+    await boot(second);
+    await second.request('session/load', { sessionId, cwd: workDir, mcpServers: [] }, 120_000);
+    const replayed = updates(second)
+      .filter(
+        (update) =>
+          update.sessionUpdate === 'agent_message_chunk' || update.sessionUpdate === 'user_message_chunk',
+      )
+      .map((update) => update.content?.text ?? '')
+      .join('\n');
+    if (!replayed.includes('first question') || !replayed.includes('first answer')) {
+      throw new Error(`replay missed history: ${replayed.slice(0, 200)}`);
+    }
+    const response = await prompt(second, sessionId, 'second question');
+    if (response.stopReason !== 'end_turn') throw new Error(`stopReason ${response.stopReason}`);
+    if (!lastText(second).includes('resumed answer')) throw new Error('the resumed session did not stream');
+  } finally {
+    await second.close();
+    await provider.close();
+    rmSync(homeDir, { recursive: true, force: true });
+    rmSync(workDir, { recursive: true, force: true });
+  }
+});
+
+test('session/fork yields a working session and delete removes it', async () => {
+  await withAgent({ script: [{ kind: 'text', text: 'one' }, { kind: 'text', text: 'two' }] }, async ({ agent, workDir }) => {
+    await boot(agent);
+    const sessionId = await newSession(agent, workDir);
+    await prompt(agent, sessionId, 'first');
+    const forked = await agent.request('session/fork', { sessionId, cwd: workDir, mcpServers: [] }, 60_000);
+    if (forked.sessionId === sessionId) throw new Error('fork returned the same session');
+    await prompt(agent, forked.sessionId, 'second');
+    const listed = await agent.request('session/list', {});
+    if (!listed.sessions.some((session) => session.sessionId === forked.sessionId)) {
+      throw new Error('session/list does not include the fork');
+    }
+    await agent.request('session/delete', { sessionId: forked.sessionId }, 30_000);
+    const after = await agent.request('session/list', {});
+    if (after.sessions.some((session) => session.sessionId === forked.sessionId)) {
+      throw new Error('session/delete left the fork listed');
+    }
+  });
+});
+
+test('a prompt after session/close is rejected', async () => {
+  await withAgent({ script: [] }, async ({ agent, workDir }) => {
+    await boot(agent);
+    const sessionId = await newSession(agent, workDir);
+    await agent.request('session/close', { sessionId }, 10_000);
+    await expectReject(prompt(agent, sessionId, 'hello'), 'a prompt after close');
+  });
+});
+
+// --- MCP -------------------------------------------------------------------
+
+test('a declared MCP server reaches the model', async () => {
+  await withAgent(
+    {
+      script: [
+        { kind: 'tool', id: 'call_mcp', name: 'mcp__echo__echo', arguments: JSON.stringify({ text: 'mcp-suite' }) },
+        { kind: 'text', text: 'done' },
+      ],
+    },
+    async ({ agent, workDir }) => {
+      await boot(agent);
+      const created = await agent.request('session/new', {
+        cwd: workDir,
+        mcpServers: [
+          {
+            name: 'echo',
+            command: process.execPath,
+            args: [join(repoRoot, 'scripts', 'lib', 'mcp-echo-server.mjs')],
+            env: [],
+          },
+        ],
+      });
+      const sessionId = created.sessionId;
+      await waitFor(
+        () => /echo\s+\[connected\]/.test(lastText(agent)),
+        'the MCP server to connect',
+        20_000,
+      ).catch(() => undefined);
+      // /mcp is a local command; retry until the server is connected.
+      let listed = '';
+      const deadline = Date.now() + 20_000;
+      while (Date.now() < deadline) {
+        const { text } = await runCommand(agent, sessionId, '/mcp');
+        listed = text;
+        if (/echo\s+\[connected\]/.test(listed)) break;
+        await new Promise((resolvePromise) => setTimeout(resolvePromise, 150));
+      }
+      if (!/echo\s+\[connected\]/.test(listed)) throw new Error(`MCP never connected: ${listed.slice(-200)}`);
+      const response = await prompt(agent, sessionId, 'use the echo tool', 120_000);
+      if (response.stopReason !== 'end_turn') throw new Error(`stopReason ${response.stopReason}`);
+      const output = updates(agent)
+        .filter((update) => update.sessionUpdate === 'tool_call_update')
+        .map((update) => JSON.stringify(update.content ?? ''))
+        .join('\\n');
+      if (!output.includes('mcp-suite')) throw new Error('the MCP tool result did not come back');
+    },
+  );
+});
+
+test('a client-hosted MCP server reaches the model (v2)', async () => {
+  await withAgent(
+    {
+      script: [
+        { kind: 'tool', id: 'call_acp_mcp', name: 'mcp__acp-echo__echo', arguments: JSON.stringify({ text: 'acp-suite' }) },
+        { kind: 'text', text: 'done' },
+      ],
+    },
+    async ({ agent, workDir }) => {
+      await boot(agent, { protocolVersion: 2 });
+      const methods = [];
+      agent.onRequest('mcp/connect', (params) => {
+        methods.push('connect');
+        return { connectionId: `conn-${params.serverId}` };
+      });
+      agent.onRequest('mcp/message', (params) => {
+        methods.push(params.method);
+        if (params.method === 'initialize') {
+          return {
+            protocolVersion: '2025-06-18',
+            capabilities: { tools: {} },
+            serverInfo: { name: 'acp-echo', version: '1' },
+          };
+        }
+        if (params.method === 'tools/list') {
+          return {
+            tools: [
+              {
+                name: 'echo',
+                description: 'Echo',
+                inputSchema: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] },
+              },
+            ],
+          };
+        }
+        if (params.method === 'tools/call') {
+          return { content: [{ type: 'text', text: String(params.params?.arguments?.text ?? '') }], isError: false };
+        }
+        return {};
+      });
+      const created = await agent.request('session/new', {
+        cwd: workDir,
+        mcpServers: [{ type: 'acp', name: 'acp-echo', serverId: 'srv-suite' }],
+      });
+      const response = await agent.request(
+        'session/prompt',
+        { sessionId: created.sessionId, prompt: [{ type: 'text', text: 'use the tool' }] },
+        120_000,
+      );
+      if (response.stopReason !== undefined) throw new Error('v2 prompt carried a stopReason');
+      for (const expected of ['connect', 'initialize', 'tools/list', 'tools/call']) {
+        if (!methods.includes(expected)) throw new Error(`missing MCP-over-ACP method: ${expected}`);
+      }
+      const output = updates(agent)
+        .filter((update) => update.sessionUpdate === 'tool_call_update')
+        .map((update) => JSON.stringify(update.content ?? ''))
+        .join('\\n');
+      if (!output.includes('acp-suite')) throw new Error('the hosted MCP result did not come back');
+    },
+  );
+});
+
+// --- goal and steering -----------------------------------------------------
+
+test('_session/goal opens and closes the goal card', async () => {
+  await withAgent(
+    { script: [{ kind: 'text', text: 'goal continued' }] },
+    async ({ agent, workDir }) => {
+      await boot(agent);
+      const sessionId = await newSession(agent, workDir);
+      await agent.request('_session/goal', { sessionId, action: 'set', objective: 'suite objective' });
+      await waitFor(
+        () => updates(agent).some((update) => String(update.toolCallId ?? '').startsWith('goal:')),
+        'the goal card',
+      );
+      await agent.request('_session/goal', { sessionId, action: 'clear' });
+      await waitFor(
+        () =>
+          updates(agent).some(
+            (update) =>
+              String(update.toolCallId ?? '').startsWith('goal:') &&
+              update.status === 'completed' &&
+              JSON.stringify(update.content ?? '').includes('Goal cancelled'),
+          ),
+        'the cleared goal card',
+      );
+    },
+  );
+});
+
+test('_session/steering injects into a running turn and reports promptRequired when idle', async () => {
+  await withAgent(
+    { script: [{ kind: 'text', text: 'slow' }, { kind: 'text', text: 'after' }], delayMs: 3_000 },
+    async ({ agent, workDir }) => {
+      await boot(agent);
+      const sessionId = await newSession(agent, workDir);
+      const running = prompt(agent, sessionId, 'start');
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 400));
+      const injected = await agent.request(
+        '_session/steering',
+        { sessionId, prompt: [{ type: 'text', text: 'also this' }] },
+        30_000,
+      );
+      if (injected.outcome !== 'injected') throw new Error(`outcome ${injected.outcome}`);
+      await running;
+      const idle = await agent.request(
+        '_session/steering',
+        { sessionId, prompt: [{ type: 'text', text: 'later' }], _meta: { steering: { idleBehavior: 'promptRequired' } } },
+        30_000,
+      );
+      if (idle.outcome !== 'promptRequired') throw new Error(`idle outcome ${idle.outcome}`);
+    },
+  );
+});
+
+test('a prompt during a run is steered, not rejected', async () => {
+  await withAgent(
+    { script: [{ kind: 'text', text: 'slow' }, { kind: 'text', text: 'second' }], delayMs: 3_000 },
+    async ({ agent, workDir }) => {
+      await boot(agent);
+      const sessionId = await newSession(agent, workDir);
+      const running = prompt(agent, sessionId, 'start');
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 400));
+      const steered = await prompt(agent, sessionId, 'and this');
+      if (steered.stopReason !== 'end_turn') throw new Error(`steered stopReason ${steered.stopReason}`);
+      if (!lastText(agent).includes('Message steered')) throw new Error('no steering note');
+      await running;
+    },
+  );
+});
+
+// --- permissions -----------------------------------------------------------
+
+test('approve for this session covers later calls', async () => {
+  await withAgent(
+    {
+      script: [
+        { kind: 'tool', id: 'call_one', name: 'Bash', arguments: JSON.stringify({ command: 'rm -rf /tmp/kimi-acp-suite-one' }) },
+        { kind: 'tool', id: 'call_two', name: 'Bash', arguments: JSON.stringify({ command: 'rm -rf /tmp/kimi-acp-suite-one' }) },
+        { kind: 'text', text: 'done' },
+      ],
+    },
+    async ({ agent, workDir }) => {
+      await boot(agent);
+      agent.onRequest('session/request_permission', () => ({
+        outcome: { outcome: 'selected', optionId: 'approve_session' },
+      }));
+      const sessionId = await newSession(agent, workDir);
+      const response = await prompt(agent, sessionId, 'run both', 180_000);
+      if (response.stopReason !== 'end_turn') throw new Error(`stopReason ${response.stopReason}`);
+      const requests = agent.requestsOf('session/request_permission').length;
+      if (requests !== 1) throw new Error(`expected one permission request, got ${requests}`);
+    },
+  );
+});
+
+test('cancelling with an open permission dialog settles cancelled', async () => {
+  await withAgent(
+    { script: [{ kind: 'tool', id: 'call_gate', name: 'Bash', arguments: JSON.stringify({ command: 'rm -rf /tmp/kimi-acp-suite-gate' }) }] },
+    async ({ agent, workDir }) => {
+      await boot(agent);
+      const pending = [];
+      agent.onRequest('session/request_permission', () => new Promise((resolvePromise) => {
+        pending.push(resolvePromise);
+      }));
+      const sessionId = await newSession(agent, workDir);
+      const running = prompt(agent, sessionId, 'run it');
+      await waitFor(() => pending.length > 0, 'the permission request');
+      agent.notify('session/cancel', { sessionId });
+      pending[0]({ outcome: { outcome: 'cancelled' } });
+      const response = await running;
+      if (response.stopReason !== 'cancelled') throw new Error(`stopReason ${response.stopReason}`);
+    },
+  );
+});
+
+// --- config options and modes ---------------------------------------------
+
+test('set_config_option switches the model and rejects unknown ids', async () => {
+  await withAgent({ script: [] }, async ({ agent, workDir }) => {
+    await boot(agent);
+    const sessionId = await newSession(agent, workDir);
+    const configured = await agent.request('session/set_config_option', {
+      sessionId,
+      configId: 'model',
+      value: 'fake',
+    });
+    const model = (configured.configOptions ?? []).find((option) => option.id === 'model');
+    if (model?.currentValue !== 'fake') throw new Error('the model option did not change');
+    if (!updates(agent).some((update) => update.sessionUpdate === 'config_option_update')) {
+      throw new Error('no config_option_update');
+    }
+    await expectReject(
+      agent.request('session/set_config_option', { sessionId, configId: 'nope', value: 'x' }),
+      'an unknown config option',
+    );
+    await expectReject(
+      agent.request('session/set_config_option', { sessionId, configId: 'model', value: 'no-such-model' }, 30_000),
+      'an unknown model alias',
+    );
+  });
+});
+
+test('set_mode switches plan mode and rejects unknown modes', async () => {
+  await withAgent({ script: [] }, async ({ agent, workDir }) => {
+    await boot(agent);
+    const sessionId = await newSession(agent, workDir);
+    await agent.request('session/set_mode', { sessionId, modeId: 'plan' });
+    const modes = updates(agent)
+      .filter((update) => update.sessionUpdate === 'current_mode_update')
+      .map((update) => update.currentModeId);
+    if (!modes.includes('plan')) throw new Error('no plan mode update');
+    await agent.request('session/set_mode', { sessionId, modeId: 'default' });
+    await expectReject(
+      agent.request('session/set_mode', { sessionId, modeId: 'warp' }),
+      'an unknown mode',
+    );
+  });
+});
+
+// --- edge cases ------------------------------------------------------------
+
+test('malformed prompt params are rejected', async () => {
+  await withAgent({ script: [] }, async ({ agent, workDir }) => {
+    await boot(agent);
+    const sessionId = await newSession(agent, workDir);
+    await expectReject(
+      agent.request('session/prompt', { sessionId, prompt: 'not-an-array' }),
+      'a malformed prompt',
+    );
+    await expectReject(
+      agent.request('session/prompt', { sessionId: 7, prompt: [{ type: 'text', text: 'x' }] }),
+      'a numeric sessionId',
+    );
+  });
+});
+
+test('cancel then a fresh prompt works', async () => {
+  await withAgent(
+    { script: [{ kind: 'text', text: 'slow' }, { kind: 'text', text: 'recovered' }], delayMs: 20_000 },
+    async ({ agent, workDir }) => {
+      await boot(agent);
+      const sessionId = await newSession(agent, workDir);
+      const running = prompt(agent, sessionId, 'start');
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 300));
+      agent.notify('session/cancel', { sessionId });
+      const cancelled = await running;
+      if (cancelled.stopReason !== 'cancelled') throw new Error('the first prompt was not cancelled');
+      const before = updates(agent).filter((update) => update.sessionUpdate === 'agent_message_chunk').length;
+      const response = await prompt(agent, sessionId, 'again');
+      if (response.stopReason !== 'end_turn') throw new Error(`stopReason ${response.stopReason}`);
+      const after = updates(agent).filter((update) => update.sessionUpdate === 'agent_message_chunk').length;
+      if (after <= before) throw new Error('the second prompt produced no output');
+    },
+  );
+});
+
+test('/init and /undo answer without crashing', async () => {
+  await withAgent({ script: [{ kind: 'text', text: 'generated' }] }, async ({ agent, workDir }) => {
+    await boot(agent);
+    const sessionId = await newSession(agent, workDir);
+    const init = await runCommand(agent, sessionId, '/init');
+    const initText = init.text.toLowerCase();
+    if (!initText.includes('agents.md') && !initText.includes('command failed')) {
+      throw new Error(`/init answered ${init.text.slice(0, 120)}`);
+    }
+    const undo = await runCommand(agent, sessionId, '/undo 1');
+    if (!/undid|command failed/i.test(undo.text)) throw new Error(`/undo answered ${undo.text.slice(0, 120)}`);
+    const logout = await runCommand(agent, sessionId, '/logout');
+    if (!/signed out|command failed/i.test(logout.text)) throw new Error(`/logout answered ${logout.text.slice(0, 120)}`);
+  });
+});
+
+test('session/new accepts additional directories', async () => {
+  await withAgent({ script: [{ kind: 'text', text: 'ok' }] }, async ({ agent, workDir }) => {
+    await boot(agent);
+    const extra = mkdtempSync(join(tmpdir(), 'kimi-acp-extra-'));
+    try {
+      const created = await agent.request('session/new', {
+        cwd: workDir,
+        additionalDirectories: [extra],
+        mcpServers: [],
+      });
+      const response = await prompt(agent, created.sessionId, 'hello');
+      if (response.stopReason !== 'end_turn') throw new Error(`stopReason ${response.stopReason}`);
+    } finally {
+      rmSync(extra, { recursive: true, force: true });
+    }
+  });
+});
+
 // --- runner ----------------------------------------------------------------
 
 for (const { name, run } of cases) {
