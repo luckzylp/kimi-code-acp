@@ -5,6 +5,7 @@ import {
   expandPluginBody,
   parseSlashCommand,
   pluginSlashCommands,
+  runBuiltinCommand,
 } from '../src/commands';
 
 describe('parseSlashCommand', () => {
@@ -43,7 +44,6 @@ describe('advertised commands', () => {
       'title',
       'undo',
       'tasks',
-      'add-dir',
       'mcp',
       'plugins',
       'init',
@@ -94,5 +94,20 @@ describe('pluginSlashCommands', () => {
     const { advertised, bodies } = await pluginSlashCommands(session);
     expect(advertised).toEqual([]);
     expect(bodies.size).toBe(0);
+  });
+});
+
+
+describe('hidden commands', () => {
+  it('does not advertise add-dir but still runs it', async () => {
+    expect(availableBuiltinCommands().map((command) => command.name)).not.toContain('add-dir');
+    const runtime = {
+      sessionId: 's',
+      session: { addAdditionalDir: async () => undefined },
+      harness: {},
+    } as never;
+    await expect(runBuiltinCommand('add-dir', '', runtime)).resolves.toEqual({
+      text: 'Usage: /add-dir <path>',
+    });
   });
 });

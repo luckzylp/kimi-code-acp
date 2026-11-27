@@ -1750,6 +1750,25 @@ test('a failed title request falls back to the first user line', async () => {
     },
   );
 });
+
+
+test('add-dir is not advertised but still runs', async () => {
+  await withAgent({ script: [] }, async ({ agent, workDir }) => {
+    await boot(agent);
+    const sessionId = await newSession(agent, workDir);
+    await waitFor(
+      () => updates(agent).some((update) => update.sessionUpdate === 'available_commands_update'),
+      'the command list',
+    );
+    const advertised = updates(agent)
+      .filter((update) => update.sessionUpdate === 'available_commands_update')
+      .flatMap((update) => update.availableCommands ?? [])
+      .map((command) => command.name);
+    if (advertised.includes('add-dir')) throw new Error('add-dir is still advertised');
+    const { text } = await runCommand(agent, sessionId, '/add-dir /tmp');
+    if (!text.includes('Added /tmp')) throw new Error(`/add-dir still runs? ${text.slice(0, 120)}`);
+  });
+});
 // --- runner ----------------------------------------------------------------
 
 for (const { name, run } of cases) {

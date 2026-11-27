@@ -35,6 +35,8 @@ interface SlashCommandSpec {
   readonly name: string;
   readonly description: string;
   readonly argumentHint?: string;
+  /** Available when typed, but not advertised in `available_commands_update`. */
+  readonly hidden?: boolean;
   readonly run: (runtime: CommandRuntime, args: string) => Promise<CommandReply>;
 }
 
@@ -42,7 +44,7 @@ const HELP: SlashCommandSpec = {
   name: 'help',
   description: 'List the commands this session understands',
   run: async () => ({
-    text: BUILTIN_COMMANDS.map(
+    text: BUILTIN_COMMANDS.filter((spec) => spec.hidden !== true).map(
       (spec) => `/${spec.name}${spec.argumentHint === undefined ? '' : ` ${spec.argumentHint}`} — ${spec.description}`,
     ).join('\n'),
   }),
@@ -208,6 +210,8 @@ const ADD_DIR: SlashCommandSpec = {
   name: 'add-dir',
   description: 'Add a directory to this session',
   argumentHint: '<path>',
+  // Kept callable, but the client's command palette should not offer it.
+  hidden: true,
   run: async (runtime, args) => {
     const path = args.trim();
     if (path.length === 0) return { text: 'Usage: /add-dir <path>' };
@@ -361,7 +365,7 @@ export const BUILTIN_COMMANDS: readonly SlashCommandSpec[] = [
 
 /** The commands advertised to the client, in the ACP advertisement shape. */
 export function availableBuiltinCommands(): AvailableCommand[] {
-  return BUILTIN_COMMANDS.map((spec) => ({
+  return BUILTIN_COMMANDS.filter((spec) => spec.hidden !== true).map((spec) => ({
     name: spec.name,
     description: spec.description,
     ...(spec.argumentHint === undefined ? {} : { input: { hint: spec.argumentHint } }),

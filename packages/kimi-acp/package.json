@@ -1,6 +1,6 @@
 {
   "name": "kimi-acp",
-  "version": "0.22.0",
+  "version": "0.22.1",
   "private": true,
   "description": "An independent ACP agent for kimi-code",
   "license": "MIT",
