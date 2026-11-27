@@ -29,6 +29,8 @@ export interface CommandReply {
   readonly text?: string;
   /** A prompt the adapter should submit as a normal turn. */
   readonly prompt?: string;
+  /** The command started (or resumed) a goal: stay busy until it stops running. */
+  readonly holdsGoal?: boolean;
 }
 
 interface SlashCommandSpec {
@@ -100,17 +102,20 @@ const GOAL: SlashCommandSpec = {
       case 'pause':
         return { text: renderGoal(await runtime.session.pauseGoal()) };
       case 'resume':
-        return { text: renderGoal(await runtime.session.resumeGoal()) };
+        return { text: renderGoal(await runtime.session.resumeGoal()), holdsGoal: true };
       case 'cancel':
         return { text: renderGoal(await runtime.session.cancelGoal()) };
       case 'replace': {
         if (objective.length === 0) return { text: 'Usage: /goal replace <objective>' };
-        return { text: renderGoal(await runtime.session.createGoal({ objective, replace: true })) };
+        return {
+          text: renderGoal(await runtime.session.createGoal({ objective, replace: true })),
+          holdsGoal: true,
+        };
       }
       default: {
         const text = args.trim();
         if (text.length === 0) return { text: 'Usage: /goal <objective>' };
-        return { text: renderGoal(await runtime.session.createGoal({ objective: text })) };
+        return { text: renderGoal(await runtime.session.createGoal({ objective: text })), holdsGoal: true };
       }
     }
   },

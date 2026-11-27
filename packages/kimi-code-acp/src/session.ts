@@ -80,6 +80,8 @@ interface Run {
   promptId?: string;
   /** Settled by a cancel that had no turn to end: its turn may still come. */
   cancelled?: boolean;
+  /** A goal run: its turns end, the goal keeps going, so the run outlives them. */
+  goal?: boolean;
 }
 
 /** A run whose turn ended while background work it started still runs. */
@@ -309,11 +311,32 @@ export class SessionBridge {
     if (wasUnowned) this.stopOrphanTurn();
   }
 
+  /** Settle the run holding this session for a goal, if there is one. */
+  private settleGoalRun(reason: StopReason): void {
+    const run = this.run;
+    if (run !== undefined && run.goal === true && !run.settled) this.settle(run, reason);
+  }
+
   /** A cancelled run's turn started after all: stop it, unless a live run owns the session. */
   private stopOrphanTurn(): void {
     if (this.run !== undefined && !this.run.settled) return;
     void this.options.session.cancel().catch((error: unknown) => {
       log.warn('acp: cancel failed', { sessionId: this.sessionId, error: describe(error) });
+    });
+  }
+
+  /**
+   * Hold a run for a goal the session just started: its continuation turns end
+   * one after another, and the client must keep showing the agent as working
+   * (and offer its stop control) until the goal stops being active.
+   */
+  awaitGoal(): Promise<StopReason> {
+    if (this.run !== undefined && !this.run.settled) {
+      return Promise.reject(new Error('a run is already in progress in this session'));
+    }
+    return new Promise<StopReason>((resolve, reject) => {
+      const run: Run = { resolve, reject, settled: false, goal: true };
+      this.run = run;
     });
   }
 
@@ -520,6 +543,13 @@ export class SessionBridge {
    * cancel, so it stops the tasks it is waiting on and settles here.
    */
   cancel(): void {
+    // A goal keeps relaunching continuations: cancel means stop it, not just
+    // its current turn (ADR 0001, Decision 2, rule 7).
+    if (this.run?.goal === true && !this.run.settled) {
+      void this.options.session.pauseGoal().catch((error: unknown) => {
+        log.warn('acp: failed to pause the goal', { sessionId: this.sessionId, error: describe(error) });
+      });
+    }
     void this.options.session.cancel().catch((error: unknown) => {
       log.warn('acp: cancel failed', { sessionId: this.sessionId, error: describe(error) });
     });
@@ -730,6 +760,12 @@ export class SessionBridge {
         // request is answered while its output is still arriving. A steered
         // prompt waiting for its turn takes precedence: it is the next turn.
         const reason = turnStopReason(event.reason, event.error);
+        // A goal's continuation turns end one after another; the run they
+        // belong to waits for the goal itself (a cancel still settles it here).
+        if (run.goal === true && reason !== 'cancelled') {
+          this.deferred = { run, reason };
+          return;
+        }
         if (reason !== 'cancelled' && this.heldTasks.size > 0 && !this.hasQueuedRun()) {
           this.deferred = { run, reason };
           log.info('acp: run waits for background work', {
@@ -770,6 +806,7 @@ export class SessionBridge {
       case 'goal.updated': {
         const snapshot = event.snapshot as GoalSnapshotLike | null | undefined;
         if (snapshot === null || snapshot === undefined) {
+          this.settleGoalRun('end_turn');
           if (this.goalId !== undefined) {
             void this.outbox.push(goalCleared(this.options.sessionId, this.goalId, 'Goal cleared.'));
             this.goalId = undefined;
@@ -778,6 +815,10 @@ export class SessionBridge {
           return;
         }
         void this.publishAirGoal(snapshot);
+        // The goal is no longer working: the run that was waiting for it is
+        // done. `active` keeps waiting, and a continuation turn ends into the
+        // hold like a background task does.
+        if (snapshot.status !== 'active') this.settleGoalRun('end_turn');
         if (this.goalId === snapshot.goalId) {
           void this.outbox.push(goalChange(this.options.sessionId, snapshot));
         } else {

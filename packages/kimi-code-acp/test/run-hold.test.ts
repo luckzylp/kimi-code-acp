@@ -18,7 +18,7 @@ type Listener = (event: Event) => void;
 
 function fakeSession() {
   const listeners: Listener[] = [];
-  const calls = { cancel: 0, stopped: [] as string[], prompts: 0, steers: [] as Array<string | undefined> };
+  const calls = { cancel: 0, paused: 0, stopped: [] as string[], prompts: 0, steers: [] as Array<string | undefined> };
   const session = {
     id: 'session_test',
     workDir: '/tmp',
@@ -37,6 +37,10 @@ function fakeSession() {
     cancel: () => {
       calls.cancel += 1;
       return Promise.resolve();
+    },
+    pauseGoal: () => {
+      calls.paused += 1;
+      return Promise.resolve({ goalId: 'g1', status: 'paused' });
     },
     stopBackgroundTask: (taskId: string) => {
       calls.stopped.push(taskId);
@@ -442,6 +446,51 @@ describe('a run and the background work its turn started', () => {
     await sleep(5);
     expect(calls.cancel).toBe(1);
     expect(first.reason).toBe('cancelled');
+  });
+
+  it('holds a goal run across its continuation turns until the goal stops', async () => {
+    const { bridge, emit } = bridgeWith();
+    const goal = observe(bridge.awaitGoal() as Promise<string>);
+    // Each continuation turn ends; the goal keeps going, so the run must not.
+    emit(turnStarted(1, { kind: 'system_trigger', name: 'goal_continuation' }));
+    emit(turnEnded(1));
+    await sleep(5);
+    expect(goal.reason).toBeUndefined();
+    expect(bridge.isBusy()).toBe(true);
+    emit(turnStarted(2, { kind: 'system_trigger', name: 'goal_continuation' }));
+    emit(turnEnded(2));
+    await sleep(5);
+    expect(goal.reason).toBeUndefined();
+    // The goal completes: the run that was waiting for it settles.
+    emit({
+      type: 'goal.updated',
+      agentId: 'main',
+      snapshot: {
+        goalId: 'g1',
+        status: 'complete',
+        objective: 'ship it',
+        turnsUsed: 2,
+        tokensUsed: 0,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      },
+    });
+    await sleep(5);
+    expect(goal.reason).toBe('end_turn');
+    expect(bridge.isBusy()).toBe(false);
+  });
+
+  it('cancelling a goal run pauses the goal and settles cancelled', async () => {
+    const { bridge, emit, calls } = bridgeWith();
+    const goal = observe(bridge.awaitGoal() as Promise<string>);
+    emit(turnStarted(1, { kind: 'system_trigger', name: 'goal_continuation' }));
+    emit(turnEnded(1));
+    await sleep(5);
+    bridge.cancel();
+    await sleep(5);
+    expect(goal.reason).toBe('cancelled');
+    expect(calls.paused).toBe(1);
+    expect(bridge.isBusy()).toBe(false);
   });
 
   it('ignores the tasks of child agents and of a settled run', async () => {

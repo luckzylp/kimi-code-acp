@@ -1709,6 +1709,37 @@ test('/login reports the sign-in state', async () => {
   });
 });
 
+test('/goal keeps the prompt open while the goal runs, and cancel pauses it', async () => {
+  await withAgent(
+    {
+      // The goal continuation turn this replaces: the goal itself is faked by
+      // the first text, so the prompt must stay open across the turn's end.
+      script: [{ kind: 'text', text: 'goal turn' }],
+      delayMs: 200,
+    },
+    async ({ agent, workDir }) => {
+      await boot(agent);
+      const sessionId = await newSession(agent, workDir);
+      const goal = agent.beginRequest(
+        'session/prompt',
+        { sessionId, prompt: [{ type: 'text', text: '/goal ship the parser fix' }] },
+        30_000,
+      );
+      // The goal card is published and the prompt is still open: the client
+      // keeps its stop control instead of going idle between continuations.
+      await waitFor(
+        () => updates(agent).some((update) => update.sessionUpdate === 'agent_message_chunk'),
+        'the goal confirmation',
+      );
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 500));
+      if (!agent.pending.has(goal.id)) throw new Error('the /goal prompt settled while the goal was active');
+      agent.notify('session/cancel', { sessionId });
+      const answer = await goal.promise;
+      if (answer.stopReason !== 'cancelled') throw new Error(`stopReason ${JSON.stringify(answer)}`);
+    },
+  );
+});
+
 test('session/set_title sets the title and emits session info', async () => {
   await withAgent({ script: [] }, async ({ agent, workDir }) => {
     const init = await boot(agent);

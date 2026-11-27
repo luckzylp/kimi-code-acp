@@ -1073,6 +1073,19 @@ export async function prompt(
     }
     if (reply !== null) {
       if (reply.text !== undefined) await entry.bridge.note(reply.text);
+      if (reply.holdsGoal === true) {
+        // The goal runs turns of its own. Keep this prompt open for as long as
+        // the goal is active: the client shows the agent as working (and offers
+        // its stop control) instead of going idle between continuations.
+        const onGoalAbort = (): void => entry.bridge.cancel();
+        signal.addEventListener('abort', onGoalAbort, { once: true });
+        try {
+          const stopReason = await entry.bridge.awaitGoal();
+          return { stopReason };
+        } finally {
+          signal.removeEventListener('abort', onGoalAbort);
+        }
+      }
       if (reply.prompt === undefined) return { stopReason: 'end_turn' };
       parts = [{ type: 'text', text: reply.prompt }];
     } else {
