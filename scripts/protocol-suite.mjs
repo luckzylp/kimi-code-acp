@@ -119,14 +119,18 @@ async function prompt(agent, sessionId, text, timeoutMs = 60_000) {
 }
 
 async function runCommand(agent, sessionId, text) {
-  const before = updates(agent).filter((u) => u.sessionUpdate === 'agent_message_chunk').length;
+  const slice = (list) =>
+    list
+      .filter((u) => u.sessionUpdate === 'agent_message_chunk' || u.sessionUpdate === 'notice')
+      .map((u) =>
+        u.sessionUpdate === 'notice'
+          ? [u.title, u.description].filter((part) => typeof part === 'string').join(': ')
+          : (u.content?.text ?? ''),
+      )
+      .join('\n');
+  const before = slice(updates(agent)).length;
   const response = await prompt(agent, sessionId, text, 30_000);
-  const textOut = updates(agent)
-    .filter((u) => u.sessionUpdate === 'agent_message_chunk')
-    .slice(before)
-    .map((u) => u.content?.text ?? '')
-    .join('\n');
-  return { response, text: textOut };
+  return { response, text: slice(updates(agent)).slice(before) };
 }
 
 const cases = [];
@@ -1034,6 +1038,61 @@ test('rewind while a run is active reports busy', async () => {
       await running;
     },
   );
+});
+
+
+// --- structured notices ----------------------------------------------------
+
+test('a notices-capable client gets a structured command failure', async () => {
+  await withAgent({ script: [] }, async ({ agent, workDir }) => {
+    const capabilities = zedCapabilities();
+    capabilities.session.notices = {};
+    await boot(agent, { capabilities });
+    const sessionId = await newSession(agent, workDir);
+    await prompt(agent, sessionId, '/model no-such-model');
+    const notice = updates(agent).find((update) => update.sessionUpdate === 'notice');
+    if (notice === undefined) throw new Error('no notice update was sent');
+    if (notice.severity !== 'warning') throw new Error(`notice severity ${notice.severity}`);
+    if (notice.title !== 'Command failed') throw new Error(`notice title ${notice.title}`);
+    const message = updates(agent)
+      .filter((update) => update.sessionUpdate === 'agent_message_chunk')
+      .map((update) => update.content?.text ?? '')
+      .join('');
+    if (message.includes('Command failed')) throw new Error('the failure was also sent as a message');
+  });
+});
+
+test('a client without notices gets the failure as a message', async () => {
+  await withAgent({ script: [] }, async ({ agent, workDir }) => {
+    const capabilities = zedCapabilities();
+    delete capabilities.session.notices;
+    await boot(agent, { capabilities });
+    const sessionId = await newSession(agent, workDir);
+    await prompt(agent, sessionId, '/model no-such-model');
+    if (updates(agent).some((update) => update.sessionUpdate === 'notice')) {
+      throw new Error('a notice was sent to a client that does not render notices');
+    }
+    const message = updates(agent)
+      .filter((update) => update.sessionUpdate === 'agent_message_chunk')
+      .map((update) => update.content?.text ?? '')
+      .join('');
+    if (!message.includes('Command failed')) throw new Error('the failure was not sent as a message');
+  });
+});
+
+test('v2 command failures are structured notices', async () => {
+  await withAgent({ script: [] }, async ({ agent, workDir }) => {
+    await boot(agent, { protocolVersion: 2 });
+    const created = await agent.request('session/new', { cwd: workDir });
+    await agent.request(
+      'session/prompt',
+      { sessionId: created.sessionId, prompt: [{ type: 'text', text: '/model no-such-model' }] },
+      30_000,
+    );
+    const notice = updates(agent).find((update) => update.sessionUpdate === 'notice');
+    if (notice === undefined) throw new Error('no v2 notice update was sent');
+    if (notice.severity !== 'warning') throw new Error(`v2 notice severity ${notice.severity}`);
+  });
 });
 
 // --- runner ----------------------------------------------------------------

@@ -64,6 +64,9 @@ verified end to end.** Present today:
   prompt and it is published as `prompt_suggestions_update` — gated on the
   client advertising `session.promptSuggestions` and on the engine's
   `prompt_prediction` experiment (`KIMI_CODE_EXPERIMENTAL_PROMPT_PREDICTION=1`)
+- **structured notices**: engine errors, warnings and failed slash commands are
+  sent as ACP `notice` updates when the client declares `session.notices`
+  (always on v2), and as transcript messages otherwise
 - **cursors and rewind**: clients that declare `session.cursors` get a
   `cursor_update` per user prompt (live prompts anchor after the previous
   entity, replayed ones before the message); `_session/rewind` drops the

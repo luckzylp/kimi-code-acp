@@ -186,6 +186,24 @@ export function subagentUpdate(
   };
 }
 
+/** A structured `notice` update, for clients that declare `session.notices`. */
+export function structuredNotice(
+  sessionId: string,
+  severity: 'info' | 'warning' | 'error',
+  title: string,
+  description?: string,
+): SessionNotification {
+  return {
+    sessionId,
+    update: {
+      sessionUpdate: 'notice',
+      severity,
+      title,
+      ...(description === undefined ? {} : { description }),
+    },
+  };
+}
+
 /** A one-line system notice in the transcript (compaction, notices). */
 export function notice(sessionId: string, text: string): SessionNotification {
   return {

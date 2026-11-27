@@ -36,6 +36,7 @@ import {
 import { LOGIN_METHOD_ID } from './auth';
 import { GOAL_METHOD, parseGoalRequest } from './goal-extension';
 import { parseRewindRequest, REWIND_METHOD } from './rewind';
+import { readV2Capabilities } from './capabilities';
 import { log } from './log';
 import { listProviders } from './providers';
 import { McpBridge } from './mcp-bridge';
@@ -55,7 +56,7 @@ export function createV2App(state: AgentState): { app: v2.AgentApp } {
           connection.client.request<Response>(method as never, params as never),
       };
     })
-    .onRequest('initialize', (context) => initialize(context.params))
+    .onRequest('initialize', (context) => initialize(state, context.params))
     .onRequest('session/new', (context) => newSessionV2(state, context.params))
     .onRequest('session/resume', (context) => resumeSessionV2(state, context.params))
     .onRequest('session/fork', (context) => forkSessionV2(state, context.params))
@@ -98,10 +99,12 @@ export function createV2App(state: AgentState): { app: v2.AgentApp } {
   return { app };
 }
 
-function initialize(params: v2.InitializeRequest): v2.InitializeResponse {
+function initialize(state: AgentState, params: v2.InitializeRequest): v2.InitializeResponse {
+  state.capabilities = readV2Capabilities(params.capabilities);
   log.info('acp: initialize v2', {
     protocolVersion: params.protocolVersion,
     client: params.info?.name,
+    clientCapabilities: state.capabilities,
   });
   return initializeResponse();
 }

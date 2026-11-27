@@ -82,6 +82,7 @@ opens the v1 or the v2 app. v2 requests delegate to the same session machinery;
 | `usage_update` | implemented | after setup, each turn end, and configuration changes |
 | `prompt_suggestions_update` | implemented | after each turn when the client advertises `session.promptSuggestions` and the engine's `prompt_prediction` experiment is on; empty list clears |
 | `cursor_update` | implemented | one per user prompt when the client advertises `session.cursors`; live prompts anchor after the previous entity, replayed ones before their message |
+| `notice` | implemented | engine errors/warnings and failed commands when the client advertises `session.notices` (always on v2); a transcript message is the fallback |
 
 ## Beyond the wire
 

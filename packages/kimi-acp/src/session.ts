@@ -23,6 +23,7 @@ import type {
 import type { Event, PromptPart, Session as KimiSession } from '@moonshot-ai/kimi-code-sdk';
 
 import {
+  structuredNotice,
   goalCard,
   goalChange,
   goalCleared,
@@ -74,6 +75,8 @@ export interface SessionBridgeOptions {
   readonly promptSuggestions?: boolean;
   /** The client accepts `cursor_update` and may rewind (`session.cursors`). */
   readonly cursors?: boolean;
+  /** The client renders structured notices (`session.notices`). */
+  readonly notices?: boolean;
   readonly send: (notification: SessionNotification) => Promise<void> | void;
 }
 
@@ -173,6 +176,19 @@ export class SessionBridge {
   async clearGoalCard(goalId: string, reason: string): Promise<void> {
     await this.post(goalCleared(this.options.sessionId, goalId, reason));
     if (this.goalId === goalId) this.goalId = undefined;
+  }
+
+  /** Report a system event: a structured notice when supported, else a message. */
+  async notify(
+    severity: 'info' | 'warning' | 'error',
+    title: string,
+    description?: string,
+  ): Promise<void> {
+    if (this.options.notices === true) {
+      await this.post(structuredNotice(this.options.sessionId, severity, title, description));
+      return;
+    }
+    await this.note(description === undefined ? title : `${title}: ${description}`);
   }
 
   /** Write a one-line system message into the transcript. */
@@ -459,11 +475,11 @@ export class SessionBridge {
         // A failed request or provider error is otherwise invisible to the
         // client: the turn ends, but nothing says why.
         log.warn('acp: engine error', { sessionId: this.sessionId, code: event.code, message: event.message });
-        void this.outbox.push(notice(this.options.sessionId, `[kimi-code] ${event.message}`));
+        void this.notify('error', `[kimi-code] ${event.message}`);
         return;
       }
       case 'warning': {
-        void this.outbox.push(notice(this.options.sessionId, `[kimi-code] ${event.message}`));
+        void this.notify('warning', `[kimi-code] ${event.message}`);
         return;
       }
       case 'session.meta.updated': {

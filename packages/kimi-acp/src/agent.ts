@@ -383,6 +383,7 @@ async function registerSession(state: AgentState, session: KimiSession): Promise
     terminalOutputDelta: state.capabilities.terminalOutputDelta,
     promptSuggestions: state.capabilities.promptSuggestions,
     cursors: state.capabilities.cursors,
+    notices: state.capabilities.notices || v2 !== undefined,
     send: async (notification) => {
       if (client !== undefined) {
         await client.notify(methods.client.session.update, notification);
@@ -829,7 +830,7 @@ export async function prompt(
       // prompt with an opaque JSON-RPC error.
       const message = error instanceof Error ? error.message : String(error);
       log.warn('acp: command failed', { command: slash.name, error: message });
-      await entry.bridge.note(`Command failed: ${message}`);
+      await entry.bridge.notify('warning', 'Command failed', message);
       return { stopReason: 'end_turn' };
     }
     if (reply !== null) {

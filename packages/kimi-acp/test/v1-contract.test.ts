@@ -81,6 +81,10 @@ const updates: Array<[string, Record<string, unknown>]> = [
   ['session_info_update', { sessionUpdate: 'session_info_update', title: 'A title' }],
   ['usage_update', { sessionUpdate: 'usage_update', used: 10, size: 100 }],
   [
+    'notice',
+    { sessionUpdate: 'notice', severity: 'warning', title: 'Command failed', description: 'boom' },
+  ],
+  [
     'cursor_update',
     {
       sessionUpdate: 'cursor_update',

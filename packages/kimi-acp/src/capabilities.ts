@@ -21,6 +21,8 @@ export interface ClientCapabilities {
   readonly promptSuggestions: boolean;
   /** `session.cursors`: the client accepts `cursor_update` and may rewind. */
   readonly cursors: boolean;
+  /** `session.notices`: the client renders structured notices. */
+  readonly notices: boolean;
 }
 
 const NONE: ClientCapabilities = {
@@ -31,6 +33,7 @@ const NONE: ClientCapabilities = {
   fsWrite: false,
   promptSuggestions: false,
   cursors: false,
+  notices: false,
 };
 
 type CapabilitiesCarrier =
@@ -51,7 +54,7 @@ export function readClientCapabilities(capabilities: CapabilitiesCarrier): Clien
   const meta = capabilities?._meta;
   const delta = metaFlag(meta, 'terminal_output_delta');
   const session = capabilities?.session as
-    | { readonly promptSuggestions?: unknown; readonly cursors?: unknown }
+    | { readonly promptSuggestions?: unknown; readonly cursors?: unknown; readonly notices?: unknown }
     | null
     | undefined;
   return {
@@ -62,5 +65,20 @@ export function readClientCapabilities(capabilities: CapabilitiesCarrier): Clien
     fsWrite: capabilities?.fs?.writeTextFile === true,
     promptSuggestions: session?.promptSuggestions != null,
     cursors: session?.cursors != null,
+    notices: session?.notices != null,
+  };
+}
+/**
+ * v2 capability mapping: the draft keeps prompt suggestions and elicitation on
+ * the client capabilities (there is no v2 terminal/fs capability).
+ */
+export function readV2Capabilities(capabilities: unknown): ClientCapabilities {
+  const record = (capabilities ?? {}) as Record<string, unknown>;
+  const session = record['session'] as { readonly promptSuggestions?: unknown } | undefined;
+  const elicitation = record['elicitation'] as { readonly form?: unknown } | undefined;
+  return {
+    ...NONE,
+    promptSuggestions: session?.promptSuggestions != null,
+    elicitationForm: elicitation?.form != null,
   };
 }
