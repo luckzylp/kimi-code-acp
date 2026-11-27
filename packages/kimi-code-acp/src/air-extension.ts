@@ -24,7 +24,13 @@ export interface AirExtension {
 }
 
 /** What this adapter implements of the AIR capability list. */
-export const AIR_AGENT_CAPABILITIES = ['sessionRename', 'goal'] as const;
+export const AIR_AGENT_CAPABILITIES = [
+  'sessionIndex',
+  'sessionBatchGet',
+  'sessionRename',
+  'sessionListSubscribe',
+  'goal',
+] as const;
 
 /** The AIR extension a client declared, if it is AIR at all. */
 export function airExtension(clientCapabilities: unknown): AirExtension | undefined {

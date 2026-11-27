@@ -71,7 +71,25 @@ import {
   SET_TITLE_METHOD,
   type RenameRequest,
 } from './air-extension';
+import { randomUUID } from 'node:crypto';
+
 import { LOGIN_METHOD_ID, terminalAuthMethod } from './auth';
+import {
+  batchGetSessions,
+  LIST_CHANGES_METHOD,
+  LIST_SUBSCRIBE_METHOD,
+  LIST_UNSUBSCRIBE_METHOD,
+  parseBatchGetRequest,
+  parseSubscribeRequest,
+  parseUnsubscribeRequest,
+  sessionRow,
+  SESSION_BATCH_GET_METHOD,
+  type BatchGetRequest,
+  type SessionRow,
+  type SubscribeRequest,
+  type UnsubscribeRequest,
+} from './session-index';
+
 import { fallbackTitle, generateTitle } from './title';
 import { readClientCapabilities, type ClientCapabilities } from './capabilities';
 import {
@@ -145,6 +163,8 @@ export interface AgentState {
   readonly mcpBootstrap: Map<string, KimiSession>;
   /** MCP-over-ACP bridges by their connection id (client-initiated messages). */
   readonly mcpBridges: Map<string, McpBridge>;
+  /** AIR `_session/list` subscriptions by id. */
+  readonly listSubscriptions: Map<string, { readonly cwd: string }>;
   /** MCP-over-ACP bridges owned by an ACP session. */
   readonly mcpSessionBridges: Map<string, McpBridge[]>;
 }
@@ -159,6 +179,7 @@ export function createAgentState(): AgentState {
     mcpBootstrap: new Map(),
     mcpBridges: new Map(),
     mcpSessionBridges: new Map(),
+    listSubscriptions: new Map(),
   };
 }
 
@@ -195,6 +216,15 @@ export function createAgentApp(
     .onRequest(REWIND_METHOD, parseRewindRequest, (context) => rewindRequest(state, context.params))
     .onRequest(RENAME_METHOD, parseRenameRequest, (context) => renameRequest(state, context.params))
     .onRequest(SET_TITLE_METHOD, parseSetTitleRequest, (context) => setTitleRequest(state, context.params))
+    .onRequest(SESSION_BATCH_GET_METHOD, parseBatchGetRequest, (context) =>
+      batchGetRequest(state, context.params),
+    )
+    .onRequest(LIST_SUBSCRIBE_METHOD, parseSubscribeRequest, (context) =>
+      subscribeRequest(state, context.params),
+    )
+    .onRequest(LIST_UNSUBSCRIBE_METHOD, parseUnsubscribeRequest, (context) =>
+      unsubscribeRequest(state, context.params),
+    )
     .onRequest('session/set_config_option', (context) => setConfigOption(state, context.params))
     .onRequest('session/prompt', (context) => prompt(state, context.params, context.signal))
     .onNotification('session/cancel', (context) => {
@@ -298,6 +328,7 @@ export async function newSession(state: AgentState, params: NewSessionRequest): 
   const entry = await registerSession(state, session);
   const { configOptions, modes } = await surface(state, session);
   log.info('acp: session created', { sessionId: session.id, cwd: params.cwd, model });
+  void notifyListChange(state, session.id);
   scheduleSurfaceUpdates(entry);
   return { sessionId: session.id, configOptions, modes };
 }
@@ -550,6 +581,7 @@ export async function deleteSession(
   const harness = await harnessOf(state);
   await harness.deleteSession(params.sessionId);
   log.info('acp: session deleted', { sessionId: params.sessionId });
+  void notifyListChange(state, params.sessionId, { removed: true });
   return {};
 }
 
@@ -573,6 +605,7 @@ export async function forkSession(state: AgentState, params: ForkSessionRequest)
   const entry = await registerSession(state, forked);
   scheduleSurfaceUpdates(entry);
   log.info('acp: session forked', { from: params.sessionId, to: forked.id });
+  void notifyListChange(state, forked.id);
   return { sessionId: forked.id };
 }
 
@@ -678,6 +711,81 @@ export async function steerRequest(state: AgentState, params: SteerRequest): Pro
  * `_session/rewind`: drop the user message a cursor lies before, and
  * everything after it, by undoing one engine turn per dropped message.
  */
+/**
+ * `_session/batch_get`: the rows AIR shows for named sessions. A missing id is
+ * a resource-not-found error (`-32002`), as AIR expects.
+ */
+export async function batchGetRequest(
+  state: AgentState,
+  params: BatchGetRequest,
+): Promise<{ sessions: SessionRow[] }> {
+  return batchGetSessions(await harnessOf(state), params);
+}
+
+/** `_session/list/subscribe`: watch one project directory for row changes. */
+export function subscribeRequest(
+  state: AgentState,
+  params: SubscribeRequest,
+): { subscriptionId: string } {
+  const subscriptionId = `sub_${randomUUID()}`;
+  state.listSubscriptions.set(subscriptionId, { cwd: params.cwd });
+  log.info('acp: session list subscribed', { subscriptionId, cwd: params.cwd });
+  return { subscriptionId };
+}
+
+/** `_session/list/unsubscribe`: idempotent. */
+export function unsubscribeRequest(
+  state: AgentState,
+  params: UnsubscribeRequest,
+): Record<string, never> {
+  state.listSubscriptions.delete(params.subscriptionId);
+  return {};
+}
+
+/**
+ * Tell every AIR list subscription about a session row change (or removal).
+ * Rows are read back from the engine so title/updatedAt are the stored ones.
+ */
+async function notifyListChange(
+  state: AgentState,
+  sessionId: string,
+  options: { readonly removed?: boolean } = {},
+): Promise<void> {
+  if (state.listSubscriptions.size === 0 || state.client === undefined) return;
+  let rows: SessionRow[] = [];
+  if (options.removed !== true) {
+    try {
+      const summaries = await (await harnessOf(state)).listSessions({
+        sessionId,
+        includeArchived: true,
+      });
+      const summary = summaries[0];
+      if (summary !== undefined) rows = [sessionRow(summary)];
+    } catch (error) {
+      log.warn('acp: session row read failed', {
+        sessionId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return;
+    }
+  }
+  for (const [subscriptionId, subscription] of state.listSubscriptions) {
+    if (rows.length > 0 && rows[0]?.cwd !== subscription.cwd) continue;
+    try {
+      await state.client.notify(LIST_CHANGES_METHOD, {
+        subscriptionId,
+        sessions: rows,
+        removed: options.removed === true ? [sessionId] : [],
+      });
+    } catch (error) {
+      log.warn('acp: session list change failed', {
+        subscriptionId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+}
+
 /** `session/set_title`: the ACP title request; same effect as `_session/rename`. */
 export async function setTitleRequest(
   state: AgentState,
@@ -691,6 +799,7 @@ export async function setTitleRequest(
   }
   await (await harnessOf(state)).renameSession({ id: params.sessionId, title });
   log.info('acp: session title set', { sessionId: params.sessionId, title });
+  void notifyListChange(state, params.sessionId);
   return { title };
 }
 
@@ -705,6 +814,7 @@ export async function renameRequest(
     harness.renameSession({ id: params.sessionId, title: params.title }),
   );
   log.info('acp: session renamed', { sessionId: params.sessionId, title: params.title });
+  void notifyListChange(state, params.sessionId);
   return {};
 }
 
@@ -971,6 +1081,7 @@ export async function prompt(
     if (stopReason === 'end_turn') {
       void entry.bridge.emitUsage();
       void maybeGenerateTitle(state, entry);
+      void notifyListChange(state, entry.session.id);
     }
     return { stopReason };
   } catch (error) {

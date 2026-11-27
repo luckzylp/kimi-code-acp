@@ -145,6 +145,13 @@ verified end to end.** Present today:
   message and everything after it by undoing one engine turn per dropped
   message, returns `{rewound:false,reason:'busy'}` mid-run, and rejects
   unknown cursors
+- **subagent sessions**: a client that declares `subagents` (Zed's acp-beta
+  flag) gets `subagent_update` for each child (title, description, inherited
+  cwd, running/idle state) and the child's text on its own session id; the
+  child never settles the parent's turn or speaks as the parent
+- **AIR session index**: `_session/batch_get`, `_session/list/subscribe` /
+  `unsubscribe`, and `_session/list/changes` (create, rename, delete, turn
+  end); archive/unarchive stay unimplemented (no SDK surface)
 - **AIR extensions**: a client that declares `_meta.jetbrains.air` gets the AIR
   capability meta, the goal payload on session info updates
   (`_meta.jetbrains.air.goal`, cleared with `null`), and `_session/rename`.
@@ -223,7 +230,7 @@ for session, reject, cancel-in-dialog), shadow terminals, declared and
 client-hosted MCP servers, goal control, config options and modes, reload after a rewind, concurrent
 sessions, workspace skills, every
 supported TUI command with normal and failing arguments, and the v2 draft —
-75 cases against a real engine and a fake provider. The expectations come from Zed's client
+102 cases against a real engine and a fake provider. The expectations come from Zed's client
 ([`docs/zed-acp-behavior.md`](docs/zed-acp-behavior.md)), so the suite doubles
 as a record of what the client actually needs.
 

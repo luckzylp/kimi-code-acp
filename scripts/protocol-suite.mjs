@@ -1977,6 +1977,58 @@ test('a long shell command keeps its full text in the card body', async () => {
   );
 });
 
+
+test('AIR session index: batch_get, subscribe and change notifications', async () => {
+  await withAgent(
+    { script: [{ kind: 'text', text: 'hi' }] },
+    async ({ agent, workDir }) => {
+      const capabilities = airCapabilities(['sessionIndex', 'sessionBatchGet', 'sessionRename', 'sessionListSubscribe']);
+      const init = await boot(agent, { capabilities });
+      const advertised = init._meta?.jetbrains?.air?.capabilities ?? [];
+      for (const capability of ['sessionIndex', 'sessionBatchGet', 'sessionListSubscribe']) {
+        if (!advertised.includes(capability)) throw new Error(`capability ${capability} not advertised`);
+      }
+
+      const { subscriptionId } = await agent.request('_session/list/subscribe', { cwd: workDir });
+      if (typeof subscriptionId !== 'string') throw new Error('no subscriptionId');
+      const changes = () =>
+        agent.notifications
+          .filter((message) => message.method === '_session/list/changes')
+          .map((message) => message.params);
+
+      const sessionId = await newSession(agent, workDir);
+      await waitFor(
+        () => changes().some((change) => change.subscriptionId === subscriptionId && change.sessions.some((row) => row.sessionId === sessionId)),
+        'the created-session change',
+      );
+
+      const got = await agent.request('_session/batch_get', { sessionIds: [sessionId] });
+      if (got.sessions[0]?.sessionId !== sessionId) throw new Error(`batch_get: ${JSON.stringify(got)}`);
+      if (got.sessions[0].cwd !== workDir) throw new Error(`batch_get cwd: ${got.sessions[0].cwd}`);
+      await expectReject(agent.request('_session/batch_get', { sessionIds: ['session_missing'] }), 'an unknown id');
+
+      await agent.request('_session/rename', { sessionId, title: 'Indexed' });
+      await waitFor(
+        () => changes().some((change) => change.sessions.some((row) => row.sessionId === sessionId && row.title === 'Indexed')),
+        'the rename change',
+      );
+
+      await agent.request('session/delete', { sessionId });
+      await waitFor(
+        () => changes().some((change) => (change.removed ?? []).includes(sessionId)),
+        'the removal change',
+      );
+
+      const before = changes().length;
+      await agent.request('_session/list/unsubscribe', { subscriptionId });
+      const other = await newSession(agent, workDir);
+      await prompt(agent, other, 'hi');
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 400));
+      if (changes().length !== before) throw new Error('changes kept arriving after unsubscribe');
+    },
+  );
+});
+
 // --- runner ----------------------------------------------------------------
 
 for (const { name, run } of cases) {

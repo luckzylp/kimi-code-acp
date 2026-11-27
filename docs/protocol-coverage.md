@@ -38,6 +38,9 @@ advertised** — the capability flag is never set, so a client does not call it;
 | `_session/rename` (AIR extension) | implemented | renames through `harness.renameSession`; the title update is emitted and `session/list` reflects it |
 | `session/set_title` | implemented | the ACP title request; returns the trimmed title and emits `session_info_update` (also advertised as `sessionCapabilities.title`) |
 | `session_info_update` | implemented | title + `updatedAt` on title changes, and the stored title after `session/load`; the engine's easy title arrives on its own, and the adapter generates an AI title after the first completed turn (engine generator is managed-Kimi-OAuth only; first-line fallback, `autoSessionTitle` gate) |
+| `subagent_update` | implemented | clients that declare `subagents`: one announcement per child (title/description/inherited cwd), state patches `running`/`idle` (stop reason), and the child's `agent_message_chunk`/`agent_thought_chunk` on its own session id; a child `turn.ended` never settles the parent |
+| `_session/batch_get` (AIR) | implemented | rows for named sessions (`-32002` for an unknown id) |
+| `_session/list/subscribe` / `unsubscribe` / `changes` (AIR) | implemented | per-cwd subscription; changes on create, rename, delete and turn end; unsubscribe is idempotent |
 | AIR goal payload | implemented | `_meta.jetbrains.air.goal` on `session_info_update` for `_session/goal` set/clear (AIR clients only) |
 | AIR archive/unarchive, native subagent sessions, diff patch | not implemented | the public SDK exposes no archive mutation; native subagent sessions need child-agent event routing; the diff patch needs an exact git patch and the engine reports old/new text only |
 | `nes/start`, `nes/suggest`, `nes/close` | not advertised | next-edit suggestions are not a chat agent feature |
