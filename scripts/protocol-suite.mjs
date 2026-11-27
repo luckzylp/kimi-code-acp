@@ -90,6 +90,12 @@ async function waitFor(predicate, what, timeoutMs = 15_000) {
   throw new Error(`timed out waiting for ${what}`);
 }
 
+function expectModes(actual, expected) {
+  if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+    throw new Error(`modes ${JSON.stringify(actual)} != ${JSON.stringify(expected)}`);
+  }
+}
+
 async function expectReject(promise, what) {
   try {
     await promise;
@@ -1795,6 +1801,91 @@ test('add-dir is not advertised but still runs', async () => {
     if (!text.includes('Added /tmp')) throw new Error(`/add-dir still runs? ${text.slice(0, 120)}`);
   });
 });
+
+test('/plan, /yolo and /auto move the mode picker like set_mode', async () => {
+  await withAgent({ script: [] }, async ({ agent, workDir }) => {
+    await boot(agent);
+    const sessionId = await newSession(agent, workDir);
+    const modes = () =>
+      updates(agent)
+        .filter((update) => update.sessionUpdate === 'current_mode_update')
+        .map((update) => update.currentModeId);
+    const plan = await runCommand(agent, sessionId, '/plan');
+    if (!plan.text.includes('Mode set to plan')) throw new Error(`/plan: ${plan.text}`);
+    await runCommand(agent, sessionId, '/plan');
+    await runCommand(agent, sessionId, '/yolo');
+    await runCommand(agent, sessionId, '/auto');
+    await runCommand(agent, sessionId, '/permission plan');
+    expectModes(modes(), ['plan', 'default', 'yolo', 'auto', 'plan']);
+  });
+});
+
+test('a cleared TodoList empties the plan', async () => {
+  await withAgent(
+    {
+      script: [
+        { kind: 'tool', id: 'todo_1', name: 'TodoList', arguments: JSON.stringify({ todos: [{ title: 'first', status: 'pending' }, { title: 'second', status: 'in_progress' }] }) },
+        { kind: 'tool', id: 'todo_2', name: 'TodoList', arguments: JSON.stringify({ todos: [] }) },
+        { kind: 'text', text: 'done' },
+      ],
+    },
+    async ({ agent, workDir }) => {
+      await boot(agent);
+      const sessionId = await newSession(agent, workDir);
+      await prompt(agent, sessionId, 'plan it', 120_000);
+      const plans = updates(agent).filter((update) => update.sessionUpdate === 'plan');
+      if (plans.length !== 2) throw new Error(`expected two plan updates, got ${plans.length}`);
+      if (plans[0].entries?.length !== 2) throw new Error(`first plan: ${JSON.stringify(plans[0])}`);
+      if ((plans[1].entries ?? null) === null || plans[1].entries.length !== 0) {
+        throw new Error(`cleared plan: ${JSON.stringify(plans[1])}`);
+      }
+    },
+  );
+});
+
+
+test('rewind reaches a skill turn and drops what follows it', async () => {
+  const marker = 'SUITE-SKILL-REWIND-MARKER';
+  await withAgent(
+    {
+      script: [
+        { kind: 'text', text: 'first answer' },
+        { kind: 'text', text: 'skill answer' },
+        { kind: 'text', text: 'third answer' },
+        { kind: 'text', text: 'fourth answer' },
+      ],
+      setupHome: (homeDir) => {
+        const dir = join(homeDir, 'skills', 'suite-skill');
+        mkdirSync(dir, { recursive: true });
+        writeFileSync(
+          join(dir, 'SKILL.md'),
+          `---\nname: suite-skill\ndescription: A skill the suite invokes.\n---\n\n# Suite skill\n\n${marker}\n`,
+        );
+      },
+    },
+    async ({ agent, provider, workDir }) => {
+      const capabilities = zedCapabilities();
+      capabilities.session.cursors = {};
+      await boot(agent, { capabilities });
+      const sessionId = await newSession(agent, workDir);
+      await prompt(agent, sessionId, 'first question');
+      await prompt(agent, sessionId, '/suite-skill do the thing');
+      await prompt(agent, sessionId, 'third question');
+      const cursors = updates(agent).filter((update) => update.sessionUpdate === 'cursor_update');
+      // Live cursors exist for the skill turn and the third prompt (the first
+      // prompt has no earlier entity to anchor to).
+      if (cursors.length !== 2) throw new Error(`expected two cursors, got ${cursors.length}`);
+      const rewound = await agent.request('_session/rewind', { sessionId, cursorId: cursors[0].cursorId });
+      if (rewound.rewound !== true) throw new Error(`rewind answered ${JSON.stringify(rewound)}`);
+      await prompt(agent, sessionId, 'fourth question');
+      const body = provider.requests.at(-1)?.body ?? '';
+      if (!body.includes('first question')) throw new Error('the kept turn is missing');
+      if (body.includes(marker)) throw new Error('the skill turn survived the rewind');
+      if (body.includes('third question')) throw new Error('the third turn survived the rewind');
+    },
+  );
+});
+
 // --- runner ----------------------------------------------------------------
 
 for (const { name, run } of cases) {

@@ -101,6 +101,8 @@ export class SessionBridge {
   private readonly userMessageIds: string[] = [];
   /** The last entity the client holds, for anchoring live cursors. */
   private lastEntity: CursorEntity | undefined;
+  /** Whether a plan was shown, so clearing it is reported (an empty `plan`). */
+  private planShown = false;
   /** The compaction on screen, for `compaction_update` lifecycle pushes. */
   private compactionId: string | undefined;
   private disposed = false;
@@ -201,14 +203,20 @@ export class SessionBridge {
   }
 
   /** Record a user message and announce a rewind cursor for it. */
-  trackUserMessage(messageId: string, anchor?: CursorEntity): void {
+  /**
+   * Record a user message the engine can undo to. Every anchor is recorded;
+   * the cursor is announced only where the client holds an entity to anchor it
+   * to (replayed messages anchor before themselves, live ones after the
+   * previous entity — the first live prompt has neither and gets no cursor).
+   */
+  trackUserMessage(messageId: string, options: { anchor?: CursorEntity; announce: boolean }): void {
     if (messageId.length === 0 || this.userMessageIds.includes(messageId)) return;
     this.userMessageIds.push(messageId);
-    if (this.options.cursors !== true || this.disposed) return;
+    if (!options.announce || this.options.cursors !== true || this.disposed) return;
     void this.post(
-      anchor === undefined
+      options.anchor === undefined
         ? cursorUpdate(this.options.sessionId, messageId)
-        : liveCursorUpdate(this.options.sessionId, messageId, anchor),
+        : liveCursorUpdate(this.options.sessionId, messageId, options.anchor),
     );
   }
 
@@ -364,11 +372,17 @@ export class SessionBridge {
       // A turn the engine starts for a steered prompt belongs to that prompt's run.
       this.promoteQueued();
       const prompt = event as unknown as {
-        readonly origin?: { readonly kind?: string };
+        readonly origin?: { readonly kind?: string; readonly trigger?: string };
+        readonly trigger?: string;
         readonly promptId?: string;
       };
-      if ((prompt.origin === undefined || prompt.origin.kind === 'user') && this.lastEntity !== undefined) {
-        this.trackUserMessage(prompt.promptId ?? randomUUID(), this.lastEntity);
+      // The same prompts the engine counts as undo anchors (its turnUndo.ts),
+      // so a rewind drops exactly what the client was shown a cursor for.
+      if (isUndoAnchor(prompt.origin, prompt.trigger)) {
+        this.trackUserMessage(prompt.promptId ?? randomUUID(), {
+          anchor: this.lastEntity,
+          announce: this.lastEntity !== undefined,
+        });
       }
       return;
     }
@@ -398,8 +412,15 @@ export class SessionBridge {
       }
       case 'tool.call.started': {
         if (event.display?.kind === 'todo_list') {
-          const plan = planNotification(this.options.sessionId, event.display.items);
-          if (plan !== null) void this.outbox.push(plan);
+          const plan = planNotification(
+            this.options.sessionId,
+            event.display.items,
+            this.planShown,
+          );
+          if (plan !== null) {
+            this.planShown = event.display.items.length > 0;
+            void this.outbox.push(plan);
+          }
         }
         this.toolCalls.started(event);
         this.lastEntity = { type: 'tool_call', toolCallId: acpToolCallId(event.turnId, event.toolCallId) };
@@ -440,7 +461,7 @@ export class SessionBridge {
         // Only a prompt the user typed gets a rewind cursor.
         const origin = event.origin as { readonly kind?: string } | undefined;
         if ((origin === undefined || origin.kind === 'user') && typeof event.userMessageId === 'string') {
-          this.trackUserMessage(event.userMessageId);
+          this.trackUserMessage(event.userMessageId, { announce: false });
         }
         return;
       }
@@ -665,6 +686,19 @@ export class SessionBridge {
       update: { sessionUpdate: kind, content: { type: 'text', text }, messageId: this.messageId },
     });
   }
+}
+
+/** Whether the engine counts a prompt as an undo anchor (`turnUndo.ts`). */
+function isUndoAnchor(
+  origin: { readonly kind?: string; readonly trigger?: string } | undefined,
+  trigger: string | undefined,
+): boolean {
+  if (trigger === 'continue') return false;
+  if (origin === undefined || origin.kind === 'user') return true;
+  return (
+    (origin.kind === 'skill_activation' || origin.kind === 'plugin_command') &&
+    origin.trigger === 'user-slash'
+  );
 }
 
 function describe(error: unknown): string {

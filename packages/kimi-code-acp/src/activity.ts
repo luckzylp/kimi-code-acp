@@ -43,11 +43,17 @@ export interface SubagentSpawnedLike {
   readonly runInBackground?: boolean;
 }
 
+/**
+ * The `plan` update for a TodoList. An emptied list reports `entries: []`
+ * (the client hides an empty plan) once a plan was on screen; a first empty
+ * list sends nothing.
+ */
 export function planNotification(
   sessionId: string,
   items: readonly TodoLike[],
+  shown = false,
 ): SessionNotification | null {
-  if (items.length === 0) return null;
+  if (items.length === 0 && !shown) return null;
   return {
     sessionId,
     update: {

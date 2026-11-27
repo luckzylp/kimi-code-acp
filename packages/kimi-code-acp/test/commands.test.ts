@@ -111,3 +111,46 @@ describe('hidden commands', () => {
     });
   });
 });
+
+
+describe('mode commands', () => {
+  const runtime = (planMode: boolean) => {
+    const applied: string[] = [];
+    return {
+      applied,
+      value: {
+        sessionId: 's',
+        session: { getStatus: async () => ({ planMode, permission: 'manual' }) },
+        harness: {},
+        setMode: async (mode: string) => {
+          applied.push(mode);
+        },
+      } as never,
+    };
+  };
+
+  it('advertises plan, yolo and auto next to permission', () => {
+    const names = availableBuiltinCommands().map((command) => command.name);
+    for (const name of ['plan', 'yolo', 'auto', 'permission']) expect(names).toContain(name);
+  });
+
+  it('/plan toggles plan mode and accepts on/off', async () => {
+    const off = runtime(false);
+    expect((await runBuiltinCommand('plan', '', off.value))?.text).toBe('Mode set to plan.');
+    const on = runtime(true);
+    expect((await runBuiltinCommand('plan', '', on.value))?.text).toBe('Mode set to default.');
+    const explicit = runtime(true);
+    await runBuiltinCommand('plan', 'on', explicit.value);
+    expect(explicit.applied).toEqual(['plan']);
+    expect((await runBuiltinCommand('plan', 'maybe', runtime(false).value))?.text).toBe('Usage: /plan [on|off]');
+  });
+
+  it('/yolo and /auto apply their modes', async () => {
+    const yolo = runtime(false);
+    await runBuiltinCommand('yolo', '', yolo.value);
+    const auto = runtime(false);
+    await runBuiltinCommand('auto', '', auto.value);
+    expect(yolo.applied).toEqual(['yolo']);
+    expect(auto.applied).toEqual(['auto']);
+  });
+});

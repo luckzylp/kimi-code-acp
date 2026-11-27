@@ -129,3 +129,12 @@ describe('subagent projection', () => {
     expect(subagentUpdate(SESSION, 's1', 'failed', 'boom').update).toMatchObject({ status: 'failed' });
   });
 });
+
+describe('plan clearing', () => {
+  it('reports an emptied list as an empty plan only once a plan was shown', () => {
+    expect(planNotification(SESSION, [], false)).toBeNull();
+    expect(planNotification(SESSION, [], true)).toMatchObject({
+      update: { sessionUpdate: 'plan', entries: [] },
+    });
+  });
+});

@@ -484,7 +484,7 @@ async function loadSession(state: AgentState, params: LoadSessionRequest): Promi
   }
   // Replayed user messages are rewindable too.
   for (const messageId of replayedUserMessageIds(records)) {
-    entry.bridge.trackUserMessage(messageId);
+    entry.bridge.trackUserMessage(messageId, { announce: true });
   }
   await entry.bridge.flush();
   const title = session.summary?.title;
@@ -580,17 +580,31 @@ async function setMode(state: AgentState, params: SetSessionModeRequest): Promis
   if (entry === undefined) throw RequestError.invalidParams(undefined, 'unknown session');
   const modeId = String(params.modeId);
   if (!isAcpModeId(modeId)) throw RequestError.invalidParams(undefined, `unknown mode: ${modeId}`);
+  await applyModeAndUpdate(state, entry, modeId);
+  return {};
+}
+
+/**
+ * Apply a mode and tell the client: `current_mode_update` for the mode
+ * picker, `config_option_update` for the pickers that depend on it. Shared by
+ * `session/set_mode` and the `/plan`, `/yolo`, `/auto`, `/permission` commands,
+ * so a slash command moves the client's UI exactly like the request does.
+ */
+async function applyModeAndUpdate(
+  state: AgentState,
+  entry: SessionEntry,
+  modeId: 'default' | 'plan' | 'auto' | 'yolo',
+): Promise<void> {
   await applyMode(entry.session, modeId);
   await entry.bridge.post({
-    sessionId: params.sessionId,
+    sessionId: entry.session.id,
     update: { sessionUpdate: 'current_mode_update', currentModeId: modeId },
   });
   const { configOptions } = await surface(state, entry.session);
   await entry.bridge.post({
-    sessionId: params.sessionId,
+    sessionId: entry.session.id,
     update: { sessionUpdate: 'config_option_update', configOptions },
   });
-  return {};
 }
 
 async function applyMode(session: KimiSession, modeId: 'default' | 'plan' | 'auto' | 'yolo'): Promise<void> {
@@ -888,7 +902,7 @@ export async function prompt(
     sessionId: entry.session.id,
     session: entry.session,
     harness: await harnessOf(state),
-    setMode: (mode) => applyMode(entry.session, mode),
+    setMode: (mode) => applyModeAndUpdate(state, entry, mode),
   };
   let parts: readonly PromptPart[] = built.parts;
   const slash = built.text.length === 0 ? null : parseSlashCommand(built.text);

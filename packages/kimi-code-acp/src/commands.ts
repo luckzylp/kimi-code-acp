@@ -324,13 +324,48 @@ const PERMISSION: SlashCommandSpec = {
       const status = await runtime.session.getStatus();
       return { text: `Permission: ${status.permission}${status.planMode ? ' (plan mode)' : ''}` };
     }
-    if (runtime.setMode === undefined) return { text: 'Mode switching is unavailable.' };
     if (mode !== 'default' && mode !== 'plan' && mode !== 'auto' && mode !== 'yolo') {
       return { text: 'Usage: /permission [default|plan|auto|yolo]' };
     }
-    await runtime.setMode(mode);
-    return { text: `Mode set to ${mode}.` };
+    return switchMode(runtime, mode);
   },
+};
+
+/** Apply an ACP mode and describe it; the runtime emits the mode/config updates. */
+async function switchMode(runtime: CommandRuntime, mode: 'default' | 'plan' | 'auto' | 'yolo'): Promise<CommandReply> {
+  if (runtime.setMode === undefined) return { text: 'Mode switching is unavailable.' };
+  await runtime.setMode(mode);
+  return { text: `Mode set to ${mode}.` };
+}
+
+const PLAN: SlashCommandSpec = {
+  name: 'plan',
+  description: 'Toggle plan mode, or turn it on/off',
+  argumentHint: '[on|off]',
+  run: async (runtime, args) => {
+    const arg = args.trim().toLowerCase();
+    if (arg === 'clear') return { text: 'Plan mode has no plan file here; /plan toggles the mode.' };
+    if (arg.length > 0 && arg !== 'on' && arg !== 'off') {
+      return { text: 'Usage: /plan [on|off]' };
+    }
+    const status = await runtime.session.getStatus();
+    const on = arg.length === 0 ? !status.planMode : arg === 'on';
+    // Leaving plan mode restores manual approvals rather than the previous
+    // permission mode: the engine reports no previous mode to restore.
+    return switchMode(runtime, on ? 'plan' : 'default');
+  },
+};
+
+const YOLO: SlashCommandSpec = {
+  name: 'yolo',
+  description: 'Ask When Needed mode: routine edits and commands run automatically; risky actions still ask',
+  run: async (runtime) => switchMode(runtime, 'yolo'),
+};
+
+const AUTO: SlashCommandSpec = {
+  name: 'auto',
+  description: 'Never Ask mode: everything runs and is decided automatically',
+  run: async (runtime) => switchMode(runtime, 'auto'),
 };
 
 const LOGOUT: SlashCommandSpec = {
@@ -349,6 +384,9 @@ export const BUILTIN_COMMANDS: readonly SlashCommandSpec[] = [
   GOAL,
   SWARM,
   TOWER,
+  PLAN,
+  YOLO,
+  AUTO,
   COMPACT,
   INIT,
   UNDO,
