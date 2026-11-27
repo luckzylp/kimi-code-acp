@@ -101,8 +101,9 @@ async function expectReject(promise, what) {
 async function boot(agent, { capabilities = zedCapabilities(), protocolVersion = 1, info } = {}) {
   await agent.request('initialize', {
     protocolVersion,
-    ...(protocolVersion === 2 ? { info: info ?? { name: 'zed-suite', version: '1.29.3' } } : {}),
-    clientCapabilities: capabilities,
+    ...(protocolVersion === 2
+      ? { info: info ?? { name: 'zed-suite', version: '1.29.3' }, capabilities }
+      : { clientCapabilities: capabilities }),
   });
   agent.onRequest('session/request_permission', () => ({
     outcome: { outcome: 'selected', optionId: 'approve_once' },
@@ -1093,6 +1094,31 @@ test('v2 command failures are structured notices', async () => {
     if (notice === undefined) throw new Error('no v2 notice update was sent');
     if (notice.severity !== 'warning') throw new Error(`v2 notice severity ${notice.severity}`);
   });
+});
+
+
+test('permission options carry the kinds Zed renders', async () => {
+  await withAgent(
+    {
+      script: [
+        { kind: 'tool', id: 'call_kinds', name: 'Bash', arguments: JSON.stringify({ command: 'rm -rf /tmp/kimi-acp-suite-kinds' }) },
+        { kind: 'text', text: 'done' },
+      ],
+    },
+    async ({ agent, workDir }) => {
+      await boot(agent);
+      const sessionId = await newSession(agent, workDir);
+      const kinds = [];
+      agent.onRequest('session/request_permission', (params) => {
+        kinds.push(...(params.options ?? []).map((option) => option.kind));
+        return { outcome: { outcome: 'selected', optionId: 'reject_once' } };
+      });
+      await prompt(agent, sessionId, 'run it', 120_000);
+      for (const expected of ['allow_once', 'allow_always', 'reject_once']) {
+        if (!kinds.includes(expected)) throw new Error(`missing permission kind: ${expected}`);
+      }
+    },
+  );
 });
 
 // --- runner ----------------------------------------------------------------

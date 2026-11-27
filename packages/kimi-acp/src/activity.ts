@@ -186,6 +186,32 @@ export function subagentUpdate(
   };
 }
 
+/** The lifecycle states ACP defines for a compaction. */
+export type CompactionStatus = 'in_progress' | 'completed' | 'failed' | 'cancelled';
+
+/** A `compaction_update`, for clients that declare `session.compaction`. */
+export function compactionUpdate(
+  sessionId: string,
+  compactionId: string,
+  status: CompactionStatus,
+  errorOrSummary?: string,
+): SessionNotification {
+  const isError = status === 'failed';
+  return {
+    sessionId,
+    update: {
+      sessionUpdate: 'compaction_update',
+      compactionId,
+      status,
+      ...(errorOrSummary === undefined
+        ? {}
+        : isError
+          ? { error: errorOrSummary }
+          : { summary: [{ type: 'text', text: errorOrSummary }] }),
+    },
+  };
+}
+
 /** A structured `notice` update, for clients that declare `session.notices`. */
 export function structuredNotice(
   sessionId: string,

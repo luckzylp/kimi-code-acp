@@ -109,6 +109,8 @@ export function toV2Updates(notification: SessionNotification): V2Update[] {
       ];
     }
     case 'notice':
+    case 'compaction_update':
+    case 'prompt_suggestions_update':
     case 'available_commands_update':
     case 'session_info_update':
     case 'usage_update':

@@ -136,6 +136,25 @@ describe('v2 wire contract', () => {
     }
   });
 
+  it('notices, compactions and suggestions translate to v2 updates', () => {
+    const translated = [
+      ...toV2Updates(
+        note({ sessionUpdate: 'notice', severity: 'warning', title: 'Command failed', description: 'x' }) as never,
+      ),
+      ...toV2Updates(note({ sessionUpdate: 'compaction_update', compactionId: 'c1', status: 'in_progress' }) as never),
+      ...toV2Updates(
+        note({
+          sessionUpdate: 'prompt_suggestions_update',
+          suggestions: [{ prompt: [{ type: 'text', text: 'next' }] }],
+        }) as never,
+      ),
+    ];
+    expect(translated.length).toBe(3);
+    for (const update of translated) {
+      expectValid(zod['zSessionUpdate'], update, String(update.sessionUpdate));
+    }
+  });
+
   it('state updates match the v2 schema', () => {
     for (const value of ['running', 'idle', 'requires_action'] as const) {
       expectValid(zod['zSessionUpdate'], stateUpdate(value), `state ${value}`);

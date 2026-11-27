@@ -23,6 +23,8 @@ export interface ClientCapabilities {
   readonly cursors: boolean;
   /** `session.notices`: the client renders structured notices. */
   readonly notices: boolean;
+  /** `session.compaction`: the client renders `compaction_update`. */
+  readonly compaction: boolean;
 }
 
 const NONE: ClientCapabilities = {
@@ -34,6 +36,7 @@ const NONE: ClientCapabilities = {
   promptSuggestions: false,
   cursors: false,
   notices: false,
+  compaction: false,
 };
 
 type CapabilitiesCarrier =
@@ -54,7 +57,12 @@ export function readClientCapabilities(capabilities: CapabilitiesCarrier): Clien
   const meta = capabilities?._meta;
   const delta = metaFlag(meta, 'terminal_output_delta');
   const session = capabilities?.session as
-    | { readonly promptSuggestions?: unknown; readonly cursors?: unknown; readonly notices?: unknown }
+    | {
+        readonly promptSuggestions?: unknown;
+        readonly cursors?: unknown;
+        readonly notices?: unknown;
+        readonly compaction?: unknown;
+      }
     | null
     | undefined;
   return {
@@ -66,6 +74,7 @@ export function readClientCapabilities(capabilities: CapabilitiesCarrier): Clien
     promptSuggestions: session?.promptSuggestions != null,
     cursors: session?.cursors != null,
     notices: session?.notices != null,
+    compaction: session?.compaction != null,
   };
 }
 /**

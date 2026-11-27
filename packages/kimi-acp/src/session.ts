@@ -23,6 +23,7 @@ import type {
 import type { Event, PromptPart, Session as KimiSession } from '@moonshot-ai/kimi-code-sdk';
 
 import {
+  compactionUpdate,
   structuredNotice,
   goalCard,
   goalChange,
@@ -77,6 +78,8 @@ export interface SessionBridgeOptions {
   readonly cursors?: boolean;
   /** The client renders structured notices (`session.notices`). */
   readonly notices?: boolean;
+  /** The client renders `compaction_update` (`session.compaction`). */
+  readonly compaction?: boolean;
   readonly send: (notification: SessionNotification) => Promise<void> | void;
 }
 
@@ -93,6 +96,8 @@ export class SessionBridge {
   private readonly userMessageIds: string[] = [];
   /** The last entity the client holds, for anchoring live cursors. */
   private lastEntity: CursorEntity | undefined;
+  /** The compaction on screen, for `compaction_update` lifecycle pushes. */
+  private compactionId: string | undefined;
   private disposed = false;
   private messageId: string | undefined;
   /** The goal currently on screen, so changes update its card instead of adding one. */
@@ -440,6 +445,13 @@ export class SessionBridge {
       }
       case 'compaction.started': {
         const instruction = event.instruction;
+        if (this.options.compaction === true) {
+          this.compactionId = randomUUID();
+          void this.outbox.push(
+            compactionUpdate(this.options.sessionId, this.compactionId, 'in_progress'),
+          );
+          return;
+        }
         void this.outbox.push(
           notice(
             this.options.sessionId,
@@ -458,17 +470,37 @@ export class SessionBridge {
         if (typeof result?.compactedCount === 'number') lines.push(`- Messages compacted: ${String(result.compactedCount)}`);
         if (typeof result?.tokensBefore === 'number') lines.push(`- Tokens before: ${String(result.tokensBefore)}`);
         if (typeof result?.tokensAfter === 'number') lines.push(`- Tokens after: ${String(result.tokensAfter)}`);
+        if (this.options.compaction === true && this.compactionId !== undefined) {
+          void this.outbox.push(
+            compactionUpdate(this.options.sessionId, this.compactionId, 'completed', lines.join('\n')),
+          );
+          return;
+        }
         void this.outbox.push(notice(this.options.sessionId, lines.join('\n')));
         return;
       }
       case 'compaction.cancelled': {
+        if (this.options.compaction === true && this.compactionId !== undefined) {
+          void this.outbox.push(
+            compactionUpdate(this.options.sessionId, this.compactionId, 'cancelled'),
+          );
+          this.compactionId = undefined;
+          return;
+        }
         void this.outbox.push(notice(this.options.sessionId, 'Compaction cancelled.'));
         return;
       }
       case 'compaction.blocked': {
-        void this.outbox.push(
-          notice(this.options.sessionId, 'Compaction is blocked by the current turn; retry when the turn is idle.'),
-        );
+        const blocked =
+          'Compaction is blocked by the current turn; retry when the turn is idle.';
+        if (this.options.compaction === true && this.compactionId !== undefined) {
+          void this.outbox.push(
+            compactionUpdate(this.options.sessionId, this.compactionId, 'failed', blocked),
+          );
+          this.compactionId = undefined;
+          return;
+        }
+        void this.outbox.push(notice(this.options.sessionId, blocked));
         return;
       }
       case 'error': {

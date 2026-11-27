@@ -241,7 +241,7 @@ The chain was re-validated on 2026-11-26 against `@moonshot-ai/kimi-code@2.8.1`
 | goal / subagent cards | `node scripts/test.mjs` | unit tests cover card ids, lifecycle status mapping, budget text, subagent states |
 | wire contract | `node scripts/test.mjs` | every v1/v2 update, config option and handshake the adapter emits parses with the ACP SDK's zod schemas |
 | goal extension | `node scripts/e2e.mjs` | `_session/goal set` opens the goal card, `/goal status` reads it, `_session/goal clear` closes it |
-| protocol suite | `node scripts/protocol-suite.mjs` | 67 cases: handshake, lifecycle, prompts, cancel/steering, permissions, terminals, declared + hosted MCP, goal, cursors + rewind, structured notices, config/modes, every TUI command (normal + failing), v2 draft |
+| protocol suite | `node scripts/protocol-suite.mjs` | 68 cases: handshake, lifecycle, prompts, cancel/steering, permission kinds, terminals, declared + hosted MCP, goal, cursors + rewind, structured notices, compaction shapes, config/modes, every TUI command (normal + failing), v2 draft |
 | protocol cancel | `node scripts/e2e.mjs` | `$/cancel_request` cancels the prompt it names |
 | replay plan | `node scripts/e2e.mjs` | `session/load` restores the plan from the TodoList call in history |
 | install tree | `node scripts/pack.mjs` | 2.6 MB tarball, installed `node_modules` + lockfile, handshake from the installed copy |

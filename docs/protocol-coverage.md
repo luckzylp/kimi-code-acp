@@ -80,9 +80,10 @@ opens the v1 or the v2 app. v2 requests delegate to the same session machinery;
 | `config_option_update` | implemented | model / thinking / mode changes |
 | `session_info_update` | implemented | engine-generated titles (`session.meta.updated`) |
 | `usage_update` | implemented | after setup, each turn end, and configuration changes |
-| `prompt_suggestions_update` | implemented | after each turn when the client advertises `session.promptSuggestions` and the engine's `prompt_prediction` experiment is on; empty list clears |
+| `prompt_suggestions_update` | v1 only | after each turn when the client advertises `session.promptSuggestions` and the engine's `prompt_prediction` experiment is on; the pinned v2 draft's parser does not carry that client capability, so v2 sessions do not announce it (the translator already passes the update through for when the draft moves) |
 | `cursor_update` | implemented | one per user prompt when the client advertises `session.cursors`; live prompts anchor after the previous entity, replayed ones before their message |
 | `notice` | implemented | engine errors/warnings and failed commands when the client advertises `session.notices` (always on v2); a transcript message is the fallback |
+| `compaction_update` | implemented | lifecycle updates when the client advertises `session.compaction`; transcript notices otherwise |
 
 ## Beyond the wire
 

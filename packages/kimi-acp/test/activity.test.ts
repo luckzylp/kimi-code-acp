@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  compactionUpdate,
   goalBody,
   goalCard,
   goalChange,
@@ -84,6 +85,22 @@ describe('goal projection', () => {
       toolCallId: 'goal:g1',
       status: 'completed',
     });
+  });
+});
+
+describe('compaction update', () => {
+  it('reports lifecycle states with the same id', () => {
+    const started = compactionUpdate(SESSION, 'c1', 'in_progress');
+    expect(started.update).toMatchObject({
+      sessionUpdate: 'compaction_update',
+      compactionId: 'c1',
+      status: 'in_progress',
+    });
+    const done = compactionUpdate(SESSION, 'c1', 'completed', 'Compaction completed.');
+    expect(done.update).toMatchObject({ status: 'completed' });
+    expect(JSON.stringify(done)).toContain('Compaction completed.');
+    const failed = compactionUpdate(SESSION, 'c1', 'failed', 'blocked');
+    expect(failed.update).toMatchObject({ status: 'failed', error: 'blocked' });
   });
 });
 
