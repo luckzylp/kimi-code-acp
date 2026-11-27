@@ -1,6 +1,29 @@
 import { describe, expect, it } from 'vitest';
 
-import { ToolCalls } from '../src/tool-calls';
+import { ToolCalls, resultContent } from '../src/tool-calls';
+
+describe('resultContent', () => {
+  it('fences a command result so it reads as code, like the command does', () => {
+    const [content] = resultContent('src/a.ts\nsrc/b.ts', { codeBlock: true });
+    expect(content).toEqual({
+      type: 'content',
+      content: { type: 'text', text: '```\nsrc/a.ts\nsrc/b.ts\n```' },
+    });
+  });
+
+  it('widens the fence past a backtick run in the output', () => {
+    const [content] = resultContent('echo ``` inside', { codeBlock: true });
+    expect(content).toEqual({
+      type: 'content',
+      content: { type: 'text', text: '````\necho ``` inside\n````' },
+    });
+  });
+
+  it('keeps a non-command result as prose', () => {
+    const [content] = resultContent('plain text');
+    expect(content).toEqual({ type: 'content', content: { type: 'text', text: 'plain text' } });
+  });
+});
 
 describe('settleTurn', () => {
   it('closes a call whose turn ended without a result', () => {

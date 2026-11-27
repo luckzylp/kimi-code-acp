@@ -295,6 +295,22 @@ describe('a run and the background work its turn started', () => {
     expect(bridge.isBusy()).toBe(false);
   });
 
+  it('settles a cancel that no turn will ever answer', async () => {
+    const { bridge, emit } = bridgeWith();
+    const first = observe(bridge.prompt('do it') as Promise<string>);
+    emit(turnStarted());
+    const second = observe(bridge.steerAsRun('and this too') as Promise<string>);
+    // The turn ends `completed`, so the steered run is promoted to lead the
+    // next turn — which the cancel then stops before it ever starts.
+    emit(turnEnded());
+    await sleep(5);
+    bridge.cancel();
+    await sleep(10);
+    expect(second.reason).toBe('cancelled');
+    expect(first.reason).toBe('end_turn');
+    expect(bridge.isBusy()).toBe(false);
+  });
+
   it('ignores the tasks of child agents and of a settled run', async () => {
     const { bridge, emit } = bridgeWith();
     const state = observe(bridge.prompt('do it') as Promise<string>);

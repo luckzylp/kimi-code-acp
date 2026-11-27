@@ -15,7 +15,9 @@ import { log } from './log';
 
 
 const MAX_TITLE_CHARS = 60;
-const REQUEST_TIMEOUT_MS = 10_000;
+/** A reasoning model spends most of a short request thinking before it answers. */
+const REQUEST_TIMEOUT_MS = 30_000;
+const ATTEMPTS = 2;
 
 interface ResolvedModel {
   readonly apiType: string;
@@ -199,9 +201,15 @@ export async function generateTitle(
 ): Promise<string | undefined> {
   const model = resolveTitleModel(config, modelAlias);
   if (model === undefined) return undefined;
-  try {
-    return await requestTitle(model, firstUserText);
-  } catch {
-    return undefined;
+  for (let attempt = 1; attempt <= ATTEMPTS; attempt += 1) {
+    try {
+      const title = await requestTitle(model, firstUserText);
+      if (title !== undefined) return title;
+    } catch {
+      // A timeout or a dropped connection is worth one more try; the caller
+      // falls back to the first message only after both attempts fail.
+    }
+    if (attempt < ATTEMPTS) log.info('acp: retrying title request', { attempt, model: model.model });
   }
+  return undefined;
 }

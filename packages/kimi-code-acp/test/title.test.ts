@@ -1,6 +1,28 @@
 import { describe, expect, it } from 'vitest';
 
+import { isPublishableTitle } from '../src/session';
 import { fallbackTitle, resolveTitleModel } from '../src/title';
+
+describe('isPublishableTitle', () => {
+  it('drops the engine placeholder, which is just the first prompt', () => {
+    // The engine names an untitled session after its first message so its own
+    // list is never empty; a client that showed it would name the thread that.
+    expect(isPublishableTitle({ lastPrompt: '帮我看看这个仓库', isCustomTitle: false }, '帮我看看这个仓库')).toBe(false);
+  });
+
+  it('keeps a custom title, which is what the adapter rename and /title set', () => {
+    expect(isPublishableTitle({ title: '仓库构建脚本工具链', isCustomTitle: true }, '仓库构建脚本工具链')).toBe(true);
+  });
+
+  it('keeps a generated title that carries no prompt patch', () => {
+    expect(isPublishableTitle(undefined, '仓库构建脚本工具链')).toBe(true);
+  });
+
+  it('ignores an update without a title', () => {
+    expect(isPublishableTitle({ lastPrompt: 'hi' }, undefined)).toBe(false);
+    expect(isPublishableTitle(undefined, '   ')).toBe(false);
+  });
+});
 
 describe('resolveTitleModel', () => {
   it('resolves a model that names a provider entry', () => {

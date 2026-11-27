@@ -92,6 +92,28 @@ interface DeferredSettlement {
  */
 const TASK_FOLLOW_UP_GRACE_MS = 1_000;
 
+/** The `session.meta.updated` patch fields that tell a real title from a placeholder. */
+interface TitlePatch {
+  readonly isCustomTitle?: unknown;
+  readonly lastPrompt?: unknown;
+}
+
+/**
+ * Whether a `session.meta.updated` title is one the client should show.
+ *
+ * The engine titles a session that has none with its first prompt
+ * (`lastPrompt` set, `isCustomTitle: false`) so the TUI's list is never empty.
+ * That is a placeholder: publishing it names the thread after the user's first
+ * message until the adapter's own title lands, and forever when the model
+ * cannot summarize. Only a real title crosses — a custom one (the adapter's
+ * rename, the user's `/title`) or a generated one.
+ */
+export function isPublishableTitle(patch: TitlePatch | undefined, title: string | undefined): boolean {
+  if (title === undefined || title.trim().length === 0) return false;
+  if (patch === undefined) return true;
+  return patch.lastPrompt === undefined || patch.isCustomTitle === true;
+}
+
 /** The background-task facts this bridge reads (`background.task.*` payloads). */
 interface BackgroundTaskInfoLike {
   readonly taskId?: unknown;
@@ -421,6 +443,16 @@ export class SessionBridge {
     const deferred = this.deferred;
     this.clearDeferred();
     if (deferred !== undefined && !deferred.run.settled) this.settle(deferred.run, 'cancelled');
+    // A cancel every live turn answers itself (`turn.ended` cancelled). A run
+    // with no turn behind it has no such event: one waiting for the steered
+    // turn the engine just cancelled, or a prompt still being submitted. Left
+    // alone it would hold its `session/prompt` open forever, so the client's
+    // composer stays busy and the session looks stopped. Settle those here.
+    const run = this.run;
+    if (run !== undefined && !run.settled && !this.turnActive) this.settle(run, 'cancelled');
+    for (const queued of this.queuedRuns.splice(0)) {
+      if (!queued.settled) this.settle(queued, 'cancelled');
+    }
   }
 
   async dispose(): Promise<void> {
@@ -694,9 +726,9 @@ export class SessionBridge {
         return;
       }
       case 'session.meta.updated': {
-        if (typeof event.title === 'string' && event.title.length > 0) {
-          void this.publishSessionInfo(event.title);
-        }
+        const patch = (event as { readonly patch?: TitlePatch }).patch;
+        const title = typeof event.title === 'string' ? event.title : undefined;
+        if (isPublishableTitle(patch, title)) void this.publishSessionInfo(title);
         return;
       }
       case 'event.session.status_changed': {

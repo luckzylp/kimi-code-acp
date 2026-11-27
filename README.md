@@ -184,7 +184,8 @@ verified end to end.** Present today:
 - coalesced `agent_message_chunk` / `agent_thought_chunk` streaming with one
   `messageId` per message, through a single ordered outbox
 - **tool cards**: title/kind/status, `rawInput`/`rawOutput`, diff content,
-  locations for readable files, streamed argument updates
+  locations for readable files, streamed argument updates, and a command's
+  output fenced as a code block so it reads like the command itself
 - **shadow terminals**: the engine runs the command; the client creates a
   display terminal from `_meta.terminal_info` and receives
   `_meta.terminal_output` chunks and `_meta.terminal_exit`. No `terminal/*`

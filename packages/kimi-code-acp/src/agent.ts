@@ -510,6 +510,7 @@ async function loadSession(state: AgentState, params: LoadSessionRequest): Promi
   });
   if (bootstrap !== undefined) state.mcpBootstrap.set(session.id, bootstrap);
   const entry = await registerSession(state, session);
+  keepExistingTitle(entry);
   const records = (session.getResumeState()?.agents?.['main']?.replay ?? []) as unknown as ReplayRecord[];
   for (const notification of projectReplay(params.sessionId, records)) {
     await entry.bridge.post(notification);
@@ -544,6 +545,7 @@ export async function resumeSession(
   });
   if (bootstrap !== undefined) state.mcpBootstrap.set(session.id, bootstrap);
   const entry = await registerSession(state, session);
+  keepExistingTitle(entry);
   const { configOptions, modes } = await surface(state, session);
   scheduleSurfaceUpdates(entry);
   log.info('acp: session resumed', { sessionId: params.sessionId });
@@ -1109,6 +1111,17 @@ async function matchSkill(
   }
   const args = match[2]?.trim();
   return args === undefined || args.length === 0 ? { name } : { name, args };
+}
+
+/**
+ * A session restored from disk already has a title, and it is the title of the
+ * conversation as a whole — not of the message the user happens to send next.
+ * Marking the entry titled keeps the first prompt of a restored session from
+ * renaming it.
+ */
+function keepExistingTitle(entry: SessionEntry): void {
+  const title = entry.session.summary?.title;
+  if (typeof title === 'string' && title.trim().length > 0) entry.titled = true;
 }
 
 /**

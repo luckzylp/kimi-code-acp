@@ -153,23 +153,37 @@ function startContent(event: ToolCallStartedEvent): ToolCallContent[] {
   return content;
 }
 
-/** One bounded preview of a tool result, as a card's content. */
-export function resultContent(output: unknown): ToolCallContent[] {
+/**
+ * One bounded preview of a tool result, as a card's content.
+ *
+ * A command's output is fenced: clients render tool content as markdown, so an
+ * unfenced result reads as prose next to the command block the card started
+ * with. The omission notice stays outside the fence.
+ */
+export function resultContent(
+  output: unknown,
+  options: { readonly codeBlock?: boolean } = {},
+): ToolCallContent[] {
   const text = resultText(output);
   if (text.length === 0) return [];
-  if (text.length <= RESULT_PREVIEW_CHARS) {
-    return [{ type: 'content', content: { type: 'text', text } }];
-  }
+  const truncated = text.length > RESULT_PREVIEW_CHARS;
   const omitted = text.length - RESULT_PREVIEW_CHARS;
-  return [
-    {
-      type: 'content',
-      content: {
-        type: 'text',
-        text: `… ${omitted.toLocaleString('en-US')} earlier characters omitted …\n${text.slice(omitted)}`,
-      },
-    },
-  ];
+  const shown = truncated ? text.slice(omitted) : text;
+  const notice = truncated ? `… ${omitted.toLocaleString('en-US')} earlier characters omitted …\n` : '';
+  const body = options.codeBlock === true ? `${notice}${fenced(shown)}` : `${notice}${shown}`;
+  return [{ type: 'content', content: { type: 'text', text: body } }];
+}
+
+/** A fence longer than any backtick run inside `text`, so the block cannot close early. */
+function fenced(text: string): string {
+  let longest = 0;
+  let run = 0;
+  for (const character of text) {
+    run = character === '`' ? run + 1 : 0;
+    if (run > longest) longest = run;
+  }
+  const ticks = '`'.repeat(Math.max(3, longest + 1));
+  return `${ticks}\n${text.replace(/\n$/, '')}\n${ticks}`;
 }
 
 function resultText(output: unknown): string {
@@ -368,7 +382,7 @@ export class ToolCalls {
         sessionUpdate: 'tool_call_update',
         toolCallId: call.acpId,
         status,
-        content: resultContent(event.output),
+        content: resultContent(event.output, { codeBlock: call.kind === 'execute' }),
         rawOutput: event.output,
         ...(Object.keys(meta).length === 0 ? {} : { _meta: meta }),
       },

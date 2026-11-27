@@ -129,6 +129,12 @@ for registry agents, or AIR moving to v2). Checklist:
   that reports the command's result (`run_in_background` tasks never hold it;
   a prompt steered in meanwhile takes the session). Engine-started
   continuations are separate turns and are introduced by a one-line note.
+- **Session titles**: the engine names an untitled session after its first
+  prompt (a `session.meta.updated` placeholder carrying `lastPrompt`); the
+  adapter does not publish that, so a thread is never named after the user's
+  first message. The title comes from the session's own model after the first
+  turn, and a session restored with a title keeps it — the next prompt of a
+  restored conversation does not rename it.
 - **Projections for activity ACP has no entity for** (`src/activity.ts`):
   goals (`goal:<id>`), subagents (`subagent:<id>`), compaction notices.
 - **Replay rules** (`src/replay.ts`): injected reminders stripped, TodoList

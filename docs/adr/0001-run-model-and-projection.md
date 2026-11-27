@@ -150,7 +150,11 @@ Rules:
    stops them (`session.stopBackgroundTask`) and settles `cancelled` itself.
    The engine then reports the stopped task in a turn of its own — the same
    `task.killed` notification the TUI gets for a user-initiated stop — which
-   the client sees as an engine turn with its note.
+   the client sees as an engine turn with its note. A run with **no turn at
+   all** is settled the same way: a steered prompt waiting for the turn the
+   cancel just stopped, or a prompt still being submitted. No event would ever
+   answer those, and an unanswered `session/prompt` leaves the client's
+   composer busy, so the session looks stopped.
 6. A prompt that arrives mid-run is **queued, never rejected**. Engine 2.8's
    `session.steer()` emits `prompt.queued`, ends the running turn at the step
    boundary (reported `completed`) and runs the message as the **next turn**;
