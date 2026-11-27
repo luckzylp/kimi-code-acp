@@ -36,7 +36,7 @@ advertised** — the capability flag is never set, so a client does not call it;
 | `_session/rewind` (AIR extension) | implemented | drops the user message a cursor names and everything after it (`undoHistory` per dropped turn); `{rewound:false,reason:'busy'}` mid-run; unknown cursors are rejected |
 | `_session/rename` (AIR extension) | implemented | renames through `harness.renameSession`; the title update is emitted and `session/list` reflects it |
 | `session/set_title` | implemented | the ACP title request; returns the trimmed title and emits `session_info_update` (also advertised as `sessionCapabilities.title`) |
-| `session_info_update` | implemented | title + `updatedAt` on title changes, and the stored title after `session/load` |
+| `session_info_update` | implemented | title + `updatedAt` on title changes, and the stored title after `session/load`; the engine's easy title arrives on its own, and the adapter generates an AI title after the first completed turn (engine generator is managed-Kimi-OAuth only; first-line fallback, `autoSessionTitle` gate) |
 | AIR goal payload | implemented | `_meta.jetbrains.air.goal` on `session_info_update` for `_session/goal` set/clear (AIR clients only) |
 | AIR archive/unarchive, native subagent sessions, diff patch | not implemented | the public SDK exposes no archive mutation; native subagent sessions need child-agent event routing; the diff patch needs an exact git patch and the engine reports old/new text only |
 | `nes/start`, `nes/suggest`, `nes/close` | not advertised | next-edit suggestions are not a chat agent feature |

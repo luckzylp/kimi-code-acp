@@ -72,6 +72,7 @@ import {
   type RenameRequest,
 } from './air-extension';
 import { LOGIN_METHOD_ID, terminalAuthMethod } from './auth';
+import { fallbackTitle, generateTitle } from './title';
 import { readClientCapabilities, type ClientCapabilities } from './capabilities';
 import {
   availableBuiltinCommands,
@@ -124,6 +125,8 @@ interface SessionEntry {
   readonly bridge: SessionBridge;
   titleAttempts: number;
   titled: boolean;
+  /** The first user text, kept for adapter-side title generation. */
+  firstUserText?: string;
 }
 
 /** The v2 client connection, shared with `v2.ts` (notify/request only). */
@@ -928,6 +931,14 @@ export async function prompt(
     entry.bridge.cancel();
   };
   signal.addEventListener('abort', onAbort, { once: true });
+  if (entry.firstUserText === undefined) {
+    const text = parts
+      .filter((part) => part.type === 'text')
+      .map((part) => part.text)
+      .join('\n')
+      .trim();
+    if (text.length > 0) entry.firstUserText = text;
+  }
   try {
     const stopReason = await entry.bridge.prompt(parts, skill);
     if (stopReason === 'end_turn') {
@@ -965,20 +976,39 @@ async function matchSkill(
 }
 
 /**
- * Title generation is best-effort and never delays the turn: the engine emits
- * `session.meta.updated` when it stores the title, and the bridge forwards it
- * as `session_info_update`.
+ * Title generation is best-effort and never delays the turn. The engine's own
+ * generator only serves the managed Kimi Code OAuth provider; for every other
+ * provider it returns `provider_unavailable`, so the session's own model is
+ * asked directly and the first user line is the fallback. The engine emits
+ * `session.meta.updated` after the rename, and the bridge forwards it as
+ * `session_info_update`.
  */
 async function maybeGenerateTitle(state: AgentState, entry: SessionEntry): Promise<void> {
   if (entry.titled || entry.titleAttempts >= MAX_TITLE_ATTEMPTS) return;
   entry.titleAttempts += 1;
+  const sessionId = entry.session.id;
   try {
     const harness = await harnessOf(state);
-    const title = await harness.generateSessionTitle({ id: entry.session.id, source: 'first_turn' });
-    if (title !== undefined) entry.titled = true;
+    const engineTitle = await harness
+      .generateSessionTitle({ id: sessionId, source: 'first_turn' })
+      .catch(() => undefined);
+    if (engineTitle !== undefined) {
+      entry.titled = true;
+      return;
+    }
+    const config = await harness.getConfig();
+    if (config.autoSessionTitle === false) return;
+    if (entry.firstUserText === undefined) return;
+    const status = await entry.session.getStatus().catch(() => undefined);
+    let title = await generateTitle(config, status?.model, entry.firstUserText);
+    title ??= fallbackTitle(entry.firstUserText);
+    if (title === undefined) return;
+    await harness.renameSession({ id: sessionId, title });
+    entry.titled = true;
+    log.info('acp: session title generated', { sessionId, title });
   } catch (error) {
     log.warn('acp: session title generation failed', {
-      sessionId: entry.session.id,
+      sessionId,
       error: error instanceof Error ? error.message : String(error),
     });
   }

@@ -77,8 +77,13 @@ verified end to end.** Present today:
   live turn produces, with injected reminders (`<system-reminder>`,
   `<task-notification>`) stripped and engine-started turns introduced by the
   same one-line note they get live
-- **session titles**: `session/set_title` (and the AIR `_session/rename`),
-  reflected by `session_info_update {title, updatedAt}` and `session/list`;
+- **session titles**: after the first completed turn the adapter asks the
+  session's own model for a short title and renames the session, so
+  `session_info_update {title, updatedAt}` reaches the client (the engine's own
+  generator only serves the managed Kimi Code OAuth provider, so custom
+  endpoints get nothing from it; the first user line is the fallback when the
+  provider cannot answer, and `autoSessionTitle = false` turns the feature
+  off). `session/set_title` (and the AIR `_session/rename`) also work;
   `sessionCapabilities` advertises list/delete/fork/resume/close/title
 - **session surface**: model / thinking / mode config options,
   `session/set_config_option`, `session/set_mode`, skills advertised as slash

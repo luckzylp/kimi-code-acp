@@ -17,6 +17,7 @@ export async function startFakeProvider({ script, text = 'Hello, world.', delayM
   const responses = script ?? [{ kind: 'text', text }];
   const requests = [];
   let cursor = 0;
+  const textEntry = (entry) => (entry.kind === 'text' ? entry.text : '');
   const server = createServer((request, response) => {
     let body = '';
     request.on('data', (chunk) => {
@@ -33,6 +34,28 @@ export async function startFakeProvider({ script, text = 'Hello, world.', delayM
       if (entry === undefined) {
         response.writeHead(500, { 'content-type': 'application/json' });
         response.end(JSON.stringify({ error: { message: 'fake provider script exhausted' } }));
+        return;
+      }
+      let parsed;
+      try {
+        parsed = JSON.parse(body);
+      } catch {
+        parsed = undefined;
+      }
+      if (parsed?.stream === false) {
+        if (entry === undefined || entry.kind !== 'text') {
+          response.writeHead(500, { 'content-type': 'application/json' });
+          response.end(JSON.stringify({ error: { message: 'fake provider script exhausted' } }));
+          return;
+        }
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(
+          JSON.stringify({
+            id: 'chatcmpl-title',
+            object: 'chat.completion',
+            choices: [{ index: 0, message: { role: 'assistant', content: entry.text }, finish_reason: 'stop' }],
+          }),
+        );
         return;
       }
       response.writeHead(200, {

@@ -53,7 +53,7 @@ async function withAgent(options, body) {
     script: options.script ?? [{ kind: 'text', text: 'ok' }],
     delayMs: options.delayMs,
   });
-  const homeDir = writeFakeHome({ baseUrl: provider.baseUrl });
+  const homeDir = writeFakeHome({ baseUrl: provider.baseUrl, autoSessionTitle: options.autoSessionTitle });
   options.setupHome?.(homeDir);
   const workDir = mkdtempSync(join(tmpdir(), 'kimi-acp-suite-'));
   const agent = spawnAgent(mainPath, {
@@ -1663,6 +1663,92 @@ test('session/set_title sets the title and emits session info', async () => {
       'an empty title',
     );
   });
+});
+
+// --- auto session titles ---------------------------------------------------
+
+test('a generated title becomes the session_info_update title', async () => {
+  await withAgent(
+    {
+      script: [{ kind: 'text', text: 'the answer' }, { kind: 'text', text: 'Short Generated Title' }],
+      autoSessionTitle: true,
+    },
+    async ({ agent, provider, workDir }) => {
+      await boot(agent);
+      const sessionId = await newSession(agent, workDir);
+      await prompt(agent, sessionId, 'please fix the parser bug');
+      await waitFor(
+        () =>
+          updates(agent).some(
+            (update) => update.sessionUpdate === 'session_info_update' && update.title === 'Short Generated Title',
+          ),
+        'the generated title',
+      );
+      const listed = await agent.request('session/list', {});
+      const entry = listed.sessions.find((session) => session.sessionId === sessionId);
+      if (entry?.title !== 'Short Generated Title') {
+        throw new Error(`session/list title: ${JSON.stringify(entry?.title)}`);
+      }
+      const titleRequest = provider.requests.find((request) => {
+        try {
+          return JSON.parse(request.body)?.stream === false;
+        } catch {
+          return false;
+        }
+      });
+      if (titleRequest === undefined) throw new Error('no title request reached the provider');
+      if (titleRequest.headers?.authorization !== 'Bearer test-token') {
+        throw new Error(`title request auth: ${JSON.stringify(titleRequest.headers?.authorization)}`);
+      }
+      const titleBody = JSON.parse(titleRequest.body);
+      if (!String(titleBody.messages?.[1]?.content ?? '').includes('parser bug')) {
+        throw new Error('the title prompt does not carry the first user text');
+      }
+    },
+  );
+});
+
+test('auto title generation does not call the model when disabled', async () => {
+  await withAgent(
+    { script: [{ kind: 'text', text: 'the answer' }], autoSessionTitle: false },
+    async ({ agent, provider, workDir }) => {
+      await boot(agent);
+      const sessionId = await newSession(agent, workDir);
+      await prompt(agent, sessionId, 'please fix the parser bug');
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 500));
+      if (provider.requests.length !== 1) {
+        throw new Error(`expected one model request, got ${provider.requests.length}`);
+      }
+      // The engine still publishes its own easy title (the first user line);
+      // what must not happen is an adapter-side model call for a title.
+      const info = updates(agent).filter((update) => update.sessionUpdate === 'session_info_update');
+      for (const update of info) {
+        if (update.title !== 'please fix the parser bug') {
+          throw new Error(`unexpected title: ${JSON.stringify(update.title)}`);
+        }
+      }
+    },
+  );
+});
+
+test('a failed title request falls back to the first user line', async () => {
+  await withAgent(
+    { script: [{ kind: 'text', text: 'the answer' }], autoSessionTitle: true },
+    async ({ agent, workDir }) => {
+      await boot(agent);
+      const sessionId = await newSession(agent, workDir);
+      await prompt(agent, sessionId, 'please fix the parser bug');
+      await waitFor(
+        () =>
+          updates(agent).some(
+            (update) =>
+              update.sessionUpdate === 'session_info_update' &&
+              update.title === 'please fix the parser bug',
+          ),
+        'the fallback title',
+      );
+    },
+  );
 });
 // --- runner ----------------------------------------------------------------
 

@@ -3,12 +3,13 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-export function writeFakeHome({ baseUrl = 'http://127.0.0.1:1/v1', apiKey = 'test-token' } = {}) {
+export function writeFakeHome({ baseUrl = 'http://127.0.0.1:1/v1', apiKey = 'test-token', autoSessionTitle = false } = {}) {
   const homeDir = mkdtempSync(join(tmpdir(), 'kimi-acp-home-'));
   writeFileSync(
     join(homeDir, 'config.toml'),
     [
       'defaultModel = "fake"',
+      `autoSessionTitle = ${autoSessionTitle ? 'true' : 'false'}`,
       '',
       '[models.fake]',
       'name = "fake-model"',
