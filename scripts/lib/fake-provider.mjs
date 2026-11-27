@@ -10,13 +10,19 @@
  *
  * Each request shifts one script entry; running out fails the turn loudly
  * rather than answering with an empty message.
+ *
+ * The adapter also asks for a session title over the same endpoint (a
+ * non-streamed completion). `titleScript` answers those on their own cursor,
+ * so a test that titles at prompt time need not interleave its entries with
+ * the turn's; without it a title request shifts the turn script as before.
  */
 import { createServer } from 'node:http';
 
-export async function startFakeProvider({ script, text = 'Hello, world.', delayMs = 20 } = {}) {
+export async function startFakeProvider({ script, titleScript, text = 'Hello, world.', delayMs = 20, titleDelayMs = 0 } = {}) {
   const responses = script ?? [{ kind: 'text', text }];
   const requests = [];
   let cursor = 0;
+  let titleCursor = 0;
   const textEntry = (entry) => (entry.kind === 'text' ? entry.text : '');
   const server = createServer((request, response) => {
     let body = '';
@@ -29,18 +35,20 @@ export async function startFakeProvider({ script, text = 'Hello, world.', delayM
         response.writeHead(404).end();
         return;
       }
-      const entry = responses[cursor];
-      cursor += 1;
-      if (entry === undefined) {
-        response.writeHead(500, { 'content-type': 'application/json' });
-        response.end(JSON.stringify({ error: { message: 'fake provider script exhausted' } }));
-        return;
-      }
       let parsed;
       try {
         parsed = JSON.parse(body);
       } catch {
         parsed = undefined;
+      }
+      const titleRequest = parsed?.stream === false && titleScript !== undefined;
+      const entry = titleRequest ? titleScript[titleCursor] : responses[cursor];
+      if (titleRequest) titleCursor += 1;
+      else cursor += 1;
+      if (entry === undefined) {
+        response.writeHead(500, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ error: { message: 'fake provider script exhausted' } }));
+        return;
       }
       if (parsed?.stream === false) {
         if (entry === undefined || entry.kind !== 'text') {
@@ -48,14 +56,18 @@ export async function startFakeProvider({ script, text = 'Hello, world.', delayM
           response.end(JSON.stringify({ error: { message: 'fake provider script exhausted' } }));
           return;
         }
-        response.writeHead(200, { 'content-type': 'application/json' });
-        response.end(
-          JSON.stringify({
-            id: 'chatcmpl-title',
-            object: 'chat.completion',
-            choices: [{ index: 0, message: { role: 'assistant', content: entry.text }, finish_reason: 'stop' }],
-          }),
-        );
+        const answer = () => {
+          response.writeHead(200, { 'content-type': 'application/json' });
+          response.end(
+            JSON.stringify({
+              id: 'chatcmpl-title',
+              object: 'chat.completion',
+              choices: [{ index: 0, message: { role: 'assistant', content: entry.text }, finish_reason: 'stop' }],
+            }),
+          );
+        };
+        if (titleDelayMs > 0) setTimeout(answer, titleDelayMs).unref?.();
+        else answer();
         return;
       }
       response.writeHead(200, {

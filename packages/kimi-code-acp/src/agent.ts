@@ -142,6 +142,8 @@ interface SessionEntry {
   readonly session: KimiSession;
   readonly bridge: SessionBridge;
   titleAttempts: number;
+  /** The title request in flight, so a turn end does not ask a second time. */
+  titleInFlight?: Promise<void>;
   /** Serializes every rename of this session: the last writer is the user's. */
   titleLock: Promise<void>;
   titled: boolean;
@@ -1096,11 +1098,17 @@ export async function prompt(
       .trim();
     if (text.length > 0) entry.firstUserText = text;
   }
+  // Ask for the title now, not at turn end: the model answers in seconds,
+  // while the turn itself can run for minutes, and a client that waits for it
+  // shows an untitled thread the whole time (claude-code-acp titles from the
+  // prompt for the same reason). A prompt too short to title from waits for
+  // the turn's answer.
+  void maybeGenerateTitle(state, entry, 'prompt');
   try {
     const stopReason = await entry.bridge.prompt(parts, skill);
     if (stopReason === 'end_turn') {
       void entry.bridge.emitUsage();
-      void maybeGenerateTitle(state, entry);
+      void maybeGenerateTitle(state, entry, 'turn');
       void notifyListChange(state, entry.session.id);
     }
     return { stopReason };
@@ -1145,20 +1153,47 @@ function keepExistingTitle(entry: SessionEntry): void {
   if (displayTitle(entry.session.summary) !== undefined) entry.titled = true;
 }
 
+/** Below this a prompt says too little to title from: wait for the turn. */
+const MIN_TITLE_PROMPT_CHARS = 10;
+
 /**
- * Title generation is best-effort and never delays the turn. The engine's own
- * generator only serves the managed Kimi Code OAuth provider; for every other
- * provider it returns `provider_unavailable`, so the session's own model is
- * asked directly and the first user line is the fallback. The engine emits
- * `session.meta.updated` after the rename, and the bridge forwards it as
- * `session_info_update`.
+ * Title generation is best-effort and never delays the turn.
+ *
+ * It runs twice at most per session: once as soon as the prompt is in flight,
+ * from the prompt text alone (the answer in seconds, where a turn can run for
+ * minutes — claude-code-acp titles from the prompt for the same reason), and
+ * once at turn end for a prompt too short to title from, which has its answer
+ * by then. The engine's own generator only serves the managed Kimi Code OAuth
+ * provider; for every other provider it returns `provider_unavailable`, so the
+ * session's own model is asked directly and the first user line is the
+ * fallback. The engine emits `session.meta.updated` after the rename, and the
+ * bridge forwards it as `session_info_update`.
  */
-async function maybeGenerateTitle(state: AgentState, entry: SessionEntry): Promise<void> {
+async function maybeGenerateTitle(
+  state: AgentState,
+  entry: SessionEntry,
+  when: 'prompt' | 'turn',
+): Promise<void> {
   if (entry.titled || entry.titleAttempts >= MAX_TITLE_ATTEMPTS) return;
+  if (entry.titleInFlight !== undefined) return;
   // A restored session whose title is the engine's placeholder is untitled for
   // us; one with a real title keeps it (`keepExistingTitle`).
   if (entry.session.summary?.titleKind === 'custom') return;
+  const prompt = entry.firstUserText?.trim() ?? '';
+  if (prompt.length === 0) return;
+  // The prompt alone is the description; "hi" is not one, so that session is
+  // titled once its answer is in.
+  if (when === 'prompt' && prompt.length < MIN_TITLE_PROMPT_CHARS) return;
   entry.titleAttempts += 1;
+  entry.titleInFlight = attemptTitle(state, entry, prompt);
+  try {
+    await entry.titleInFlight;
+  } finally {
+    entry.titleInFlight = undefined;
+  }
+}
+
+async function attemptTitle(state: AgentState, entry: SessionEntry, prompt: string): Promise<void> {
   const sessionId = entry.session.id;
   try {
     const harness = await harnessOf(state);
@@ -1171,10 +1206,9 @@ async function maybeGenerateTitle(state: AgentState, entry: SessionEntry): Promi
     }
     const config = await harness.getConfig();
     if (config.autoSessionTitle === false) return;
-    if (entry.firstUserText === undefined) return;
     const status = await entry.session.getStatus().catch(() => undefined);
-    let title = await generateTitle(config, status?.model, entry.firstUserText);
-    title ??= fallbackTitle(entry.firstUserText);
+    let title = await generateTitle(config, status?.model, prompt);
+    title ??= fallbackTitle(prompt);
     if (title === undefined) return;
     // The request can take half a minute; a title the user set meanwhile (or a
     // `/title` in the same window) wins over the generated one, and the lock

@@ -51,7 +51,9 @@ function zedCapabilities(extra = {}) {
 async function withAgent(options, body) {
   const provider = await startFakeProvider({
     script: options.script ?? [{ kind: 'text', text: 'ok' }],
+    titleScript: options.titleScript,
     delayMs: options.delayMs,
+    titleDelayMs: options.titleDelayMs,
   });
   const homeDir = writeFakeHome({ baseUrl: provider.baseUrl, autoSessionTitle: options.autoSessionTitle });
   options.setupHome?.(homeDir);
@@ -1729,7 +1731,8 @@ test('session/set_title sets the title and emits session info', async () => {
 test('a generated title becomes the session_info_update title', async () => {
   await withAgent(
     {
-      script: [{ kind: 'text', text: 'the answer' }, { kind: 'text', text: 'Short Generated Title' }],
+      script: [{ kind: 'text', text: 'the answer' }],
+      titleScript: [{ kind: 'text', text: 'Short Generated Title' }],
       autoSessionTitle: true,
     },
     async ({ agent, provider, workDir }) => {
@@ -1770,9 +1773,11 @@ test('a generated title becomes the session_info_update title', async () => {
 test('a title the user sets during the first turn is not overwritten by the generated one', async () => {
   await withAgent(
     {
-      script: [{ kind: 'text', text: 'the answer' }, { kind: 'text', text: 'GENERATED OVERWRITE' }],
+      script: [{ kind: 'text', text: 'the answer' }],
+      titleScript: [{ kind: 'text', text: 'GENERATED OVERWRITE' }],
       autoSessionTitle: true,
       delayMs: 1500,
+      titleDelayMs: 1500,
     },
     async ({ agent, workDir }) => {
       await boot(agent);
@@ -1785,13 +1790,48 @@ test('a title the user sets during the first turn is not overwritten by the gene
       const titles = updates(agent)
         .filter((update) => update.sessionUpdate === 'session_info_update')
         .map((update) => update.title);
-      if (titles.includes('GENERATED OVERWRITE')) {
-        throw new Error(`the generated title overwrote the user's: ${JSON.stringify(titles)}`);
-      }
+      // The generated title may land first (it is asked for at prompt time);
+      // what must never happen is it landing after the user's.
       if (titles.at(-1) !== 'My Own Title') throw new Error(`titles: ${JSON.stringify(titles)}`);
       const listed = await agent.request('session/list', {});
       const entry = listed.sessions.find((session) => session.sessionId === sessionId);
       if (entry?.title !== 'My Own Title') throw new Error(`session/list title: ${JSON.stringify(entry?.title)}`);
+    },
+  );
+});
+
+test('the title arrives while the first turn is still running', async () => {
+  await withAgent(
+    {
+      // The turn answers slowly; the title does not wait for it.
+      script: [{ kind: 'text', text: 'a long answer' }],
+      titleScript: [{ kind: 'text', text: 'Early Title' }],
+      autoSessionTitle: true,
+      delayMs: 3000,
+    },
+    async ({ agent, workDir }) => {
+      await boot(agent);
+      const sessionId = await newSession(agent, workDir);
+      const running = agent.beginRequest(
+        'session/prompt',
+        { sessionId, prompt: [{ type: 'text', text: 'please refactor the parser' }] },
+        60_000,
+      );
+      // The title is published before the turn answers - which is the point:
+      // a client shows it while the agent is still working.
+      await waitFor(
+        () =>
+          updates(agent).some(
+            (update) => update.sessionUpdate === 'session_info_update' && update.title === 'Early Title',
+          ),
+        'the title before turn end',
+        10_000,
+      );
+      if (!agent.pending.has(running.id)) {
+        throw new Error('the turn had already finished; the title did not arrive early');
+      }
+      const answer = await running.promise;
+      if (answer.stopReason !== 'end_turn') throw new Error(`stopReason ${JSON.stringify(answer)}`);
     },
   );
 });
@@ -1819,14 +1859,17 @@ test('auto title generation does not call the model when disabled', async () => 
 test('a restored session whose only title is the engine placeholder gets a generated one', async () => {
   const provider = await startFakeProvider({
     // The cancelled first turn still consumes an entry; the last one is the title.
-    script: [{ kind: 'text', text: 'cancelled answer' }, { kind: 'text', text: 'second answer' }, { kind: 'text', text: 'Title After Restore' }],
+    script: [{ kind: 'text', text: 'cancelled answer' }, { kind: 'text', text: 'second answer' }],
+    titleScript: [{ kind: 'text', text: 'Title After Restore' }],
     delayMs: 1500,
   });
   const homeDir = writeFakeHome({ baseUrl: provider.baseUrl, autoSessionTitle: true });
   const workDir = mkdtempSync(join(tmpdir(), 'kimi-acp-suite-'));
   const spawn = () => spawnAgent(mainPath, { homeDir, env: { KIMI_ACP_DEBUG: '1' } });
   let agent = spawn();
-  const firstPrompt = 'a first prompt that is cancelled';
+  // Short enough that no title is requested from it, so a cancelled turn
+  // leaves the session with nothing but the engine's placeholder.
+  const firstPrompt = 'hi';
   try {
     await boot(agent);
     const sessionId = await newSession(agent, workDir);
@@ -1872,7 +1915,8 @@ test('a restored session whose only title is the engine placeholder gets a gener
 
 test('a failed title request falls back to the first user line', async () => {
   await withAgent(
-    { script: [{ kind: 'text', text: 'the answer' }], autoSessionTitle: true },
+    // An empty title script makes every title request fail, deterministically.
+    { script: [{ kind: 'text', text: 'the answer' }], titleScript: [], autoSessionTitle: true },
     async ({ agent, workDir }) => {
       await boot(agent);
       const sessionId = await newSession(agent, workDir);
