@@ -376,6 +376,28 @@ describe('a run and the background work its turn started', () => {
     expect(bridge.isBusy()).toBe(false);
   });
 
+  it('does not treat a turn of a run that merely finished as an orphan', async () => {
+    let accept!: (value: { promptId: string }) => void;
+    const { bridge, emit, calls } = bridgeWith(5, {
+      prompt: () =>
+        new Promise<{ promptId: string }>((resolve) => {
+          accept = resolve;
+        }),
+    });
+    const first = observe(bridge.prompt('do it') as Promise<string>);
+    emit(turnStarted(1, { kind: 'user' }, 'prompt_done'));
+    emit(turnEnded(1));
+    await sleep(5);
+    expect(first.reason).toBe('end_turn');
+    // The engine acknowledges a prompt the turn already finished: that is not a
+    // cancel, so its id must not be remembered as one.
+    accept({ promptId: 'prompt_done' });
+    await sleep(5);
+    emit(turnStarted(2, { kind: 'user' }, 'prompt_done'));
+    await sleep(5);
+    expect(calls.cancel).toBe(0);
+  });
+
   it('leaves a user turn alone that no cancelled run owns', async () => {
     const { bridge, emit, calls } = bridgeWith();
     const first = observe(bridge.prompt('do it') as Promise<string>);

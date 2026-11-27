@@ -78,6 +78,8 @@ interface Run {
   settled: boolean;
   /** The engine's id for the prompt this run owns: how a turn is told apart from an orphan. */
   promptId?: string;
+  /** Settled by a cancel that had no turn to end: its turn may still come. */
+  cancelled?: boolean;
 }
 
 /** A run whose turn ended while background work it started still runs. */
@@ -285,7 +287,9 @@ export class SessionBridge {
    */
   private bindPromptId(run: Run, promptId: string): void {
     run.promptId = promptId;
-    if (!run.settled) return;
+    // A run that merely finished before its submission came back is not an
+    // orphan: its turn already ran (or is running) and belongs to nobody.
+    if (!run.settled || run.cancelled !== true) return;
     if (this.cancelledRunAwaitingId === run) this.cancelledRunAwaitingId = undefined;
     this.cancelledPrompts.add(promptId);
     if (this.unownedTurnAwaitingId?.promptId === promptId) this.stopOrphanTurn();
@@ -530,6 +534,7 @@ export class SessionBridge {
 
   /** Remember a run the cancel answers without a turn, so that turn is stopped when it starts. */
   private rememberCancelled(run: Run): void {
+    run.cancelled = true;
     if (run.promptId === undefined) {
       this.cancelledRunAwaitingId = run;
       return;
