@@ -143,9 +143,10 @@ schemas, so a shape drift fails the build instead of a client.
 handshake capabilities, session lifecycle (new/list/load/fork/delete/close),
 prompts (text/image/resource/cancel/steering), permissions (approve, approve
 for session, reject, cancel-in-dialog), shadow terminals, declared and
-client-hosted MCP servers, goal control, config options and modes, every
+client-hosted MCP servers, goal control, config options and modes, reload after a rewind, concurrent
+sessions, every
 supported TUI command with normal and failing arguments, and the v2 draft —
-62 cases against a real engine and a fake provider. The expectations come from Zed's client
+71 cases against a real engine and a fake provider. The expectations come from Zed's client
 ([`docs/zed-acp-behavior.md`](docs/zed-acp-behavior.md)), so the suite doubles
 as a record of what the client actually needs.
 

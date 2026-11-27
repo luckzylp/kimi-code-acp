@@ -1121,6 +1121,115 @@ test('permission options carry the kinds Zed renders', async () => {
   );
 });
 
+
+// --- reload after rewind, concurrency and v2 errors -----------------------
+
+test('rewind survives a reload: the dropped turn is not replayed', async () => {
+  const provider = await startFakeProvider({
+    script: [
+      { kind: 'text', text: 'first answer' },
+      { kind: 'text', text: 'second answer' },
+    ],
+  });
+  const homeDir = writeFakeHome({ baseUrl: provider.baseUrl });
+  const workDir = mkdtempSync(join(tmpdir(), 'kimi-acp-suite-'));
+  let sessionId;
+  const first = spawnAgent(mainPath, { homeDir, env: { KIMI_ACP_DEBUG: '1' } });
+  try {
+    const capabilities = zedCapabilities();
+    capabilities.session.cursors = {};
+    await boot(first, { capabilities });
+    sessionId = await newSession(first, workDir);
+    await prompt(first, sessionId, 'first question');
+    await prompt(first, sessionId, 'second question');
+    const cursor = first
+      .sessionUpdates()
+      .filter((update) => update.sessionUpdate === 'cursor_update')
+      .at(-1);
+    if (cursor === undefined) throw new Error('no cursor to rewind to');
+    const rewound = await first.request('_session/rewind', { sessionId, cursorId: cursor.cursorId });
+    if (rewound.rewound !== true) throw new Error('rewind failed');
+  } finally {
+    await first.close();
+  }
+
+  const second = spawnAgent(mainPath, { homeDir, env: { KIMI_ACP_DEBUG: '1' } });
+  try {
+    const capabilities = zedCapabilities();
+    capabilities.session.cursors = {};
+    await boot(second, { capabilities });
+    await second.request('session/load', { sessionId, cwd: workDir, mcpServers: [] }, 120_000);
+    const replayed = second
+      .sessionUpdates()
+      .filter(
+        (update) =>
+          update.sessionUpdate === 'agent_message_chunk' || update.sessionUpdate === 'user_message_chunk',
+      )
+      .map((update) => update.content?.text ?? '')
+      .join('\n');
+    if (!replayed.includes('first question')) throw new Error('the kept turn is missing from the reload');
+    if (replayed.includes('second question')) throw new Error('the rewound turn came back on reload');
+    const cursors = second.sessionUpdates().filter((update) => update.sessionUpdate === 'cursor_update');
+    if (cursors.length === 0) throw new Error('the reload announced no cursors');
+    if (cursors[0].anchor?.type !== 'user_message') throw new Error('a replay cursor is not message-anchored');
+    if (cursors[0].anchor.position !== 'before') throw new Error('a replay cursor is not a before-cursor');
+  } finally {
+    await second.close();
+    await provider.close();
+    rmSync(homeDir, { recursive: true, force: true });
+    rmSync(workDir, { recursive: true, force: true });
+  }
+});
+
+test('two sessions run independently', async () => {
+  await withAgent(
+    {
+      script: [
+        { kind: 'text', text: 'alpha answer' },
+        { kind: 'text', text: 'beta answer' },
+      ],
+      delayMs: 2_000,
+    },
+    async ({ agent, workDir }) => {
+      await boot(agent);
+      const alpha = await newSession(agent, workDir);
+      const beta = await newSession(agent, workDir);
+      const alphaPromise = prompt(agent, alpha, 'alpha question', 60_000);
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 100));
+      const betaPromise = prompt(agent, beta, 'beta question', 60_000);
+      const [alphaResponse, betaResponse] = await Promise.all([alphaPromise, betaPromise]);
+      if (alphaResponse.stopReason !== 'end_turn' || betaResponse.stopReason !== 'end_turn') {
+        throw new Error('a concurrent session did not finish');
+      }
+      const textFor = (sessionId) =>
+        agent.notifications
+          .filter(
+            (message) =>
+              message.method === 'session/update' &&
+              message.params.sessionId === sessionId &&
+              message.params.update.sessionUpdate === 'agent_message_chunk',
+          )
+          .map((message) => message.params.update.content?.text ?? '')
+          .join('');
+      const alphaText = textFor(alpha);
+      const betaText = textFor(beta);
+      if (!alphaText.includes('alpha answer') || alphaText.includes('beta answer')) {
+        throw new Error(`alpha session text: ${JSON.stringify(alphaText)}`);
+      }
+      if (!betaText.includes('beta answer') || betaText.includes('alpha answer')) {
+        throw new Error(`beta session text: ${JSON.stringify(betaText)}`);
+      }
+    },
+  );
+});
+
+test('unknown v2 methods are rejected', async () => {
+  await withAgent({ script: [] }, async ({ agent, workDir }) => {
+    await boot(agent, { protocolVersion: 2 });
+    await agent.request('session/new', { cwd: workDir });
+    await expectReject(agent.request('session/explode', {}, 5_000), 'a v2 unknown method');
+  });
+});
 // --- runner ----------------------------------------------------------------
 
 for (const { name, run } of cases) {
