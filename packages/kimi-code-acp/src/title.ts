@@ -77,8 +77,83 @@ export function resolveTitleModel(
 }
 
 const SYSTEM_PROMPT =
-  'Create a short title (at most 6 words) for the conversation that starts with the ' +
-  "user's message. Reply with the title only: no quotes, no markdown, no trailing period.";
+  'Create a short title (at most 6 words) that summarizes this conversation. ' +
+  'Reply with the title only: no quotes, no markdown, no trailing period.';
+
+/** How much of the conversation a title is generated from (the engine's digest). */
+export const MAX_TITLE_DIGEST_CHARS = 3_000;
+const DIGEST_USER_CHARS = 200;
+const DIGEST_ASSISTANT_CHARS = 200;
+
+/** The parts of a conversation message this module reads. */
+interface DigestMessage {
+  readonly role: string;
+  readonly content: readonly { readonly type: string; readonly text?: string | undefined }[];
+  readonly origin?: { readonly kind?: string | undefined } | undefined;
+}
+
+/** Prompt origins the user did not type: their text is not the conversation's subject. */
+const AUTONOMOUS_ORIGINS: ReadonlySet<string> = new Set([
+  'system_trigger',
+  'cron_job',
+  'cron_missed',
+  'injection',
+  'shell_command',
+]);
+
+function textOf(message: DigestMessage): string {
+  return message.content
+    .map((part) => (part.type === 'text' ? (part.text ?? '') : ''))
+    .join('')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * The whole conversation as a title is generated from, shaped like the engine's
+ * own digest: `user: …` / `assistant: …` per exchange, each side cut short, the
+ * ends kept when the whole thing does not fit.
+ */
+export function conversationDigest(messages: readonly DigestMessage[]): string | undefined {
+  const turns: string[][] = [];
+  for (const message of messages) {
+    if (message.role === 'user') {
+      const origin = message.origin?.kind;
+      if (origin !== undefined && AUTONOMOUS_ORIGINS.has(origin)) continue;
+      const text = textOf(message);
+      if (text.length === 0) continue;
+      turns.push([`user: ${text.slice(0, DIGEST_USER_CHARS)}`]);
+      continue;
+    }
+    if (message.role !== 'assistant' || turns.length === 0) continue;
+    const text = textOf(message);
+    if (text.length === 0) continue;
+    const turn = turns[turns.length - 1]!;
+    // The last answer of the exchange is the one worth summarizing.
+    if (turn.length === 1) turn.push(`assistant: ${text.slice(0, DIGEST_ASSISTANT_CHARS)}`);
+    else turn[1] = `assistant: ${text.slice(0, DIGEST_ASSISTANT_CHARS)}`;
+  }
+  if (turns.length === 0) return undefined;
+  const joined = turns.flat().join('\n');
+  if (joined.length <= MAX_TITLE_DIGEST_CHARS) return joined;
+  const marker = '...';
+  let budget = MAX_TITLE_DIGEST_CHARS - marker.length - 2;
+  const head: string[] = [];
+  for (const line of turns[0]!) {
+    if (budget < line.length + 1) break;
+    head.push(line);
+    budget -= line.length + 1;
+  }
+  const tail: string[] = [];
+  for (let index = turns.length - 1; index >= 1; index -= 1) {
+    const group = turns[index]!;
+    const cost = group.reduce((sum, line) => sum + line.length + 1, 0);
+    if (budget < cost) break;
+    tail.unshift(...group);
+    budget -= cost;
+  }
+  return [...head, marker, ...tail].join('\n');
+}
 
 function sanitize(raw: string): string | undefined {
   const first = raw

@@ -1826,8 +1826,14 @@ test('/title without an argument generates one with the session model and publis
         }
       });
       if (titleRequest === undefined) throw new Error('no title request reached the provider');
-      if (!String(JSON.parse(titleRequest.body).messages?.[1]?.content ?? '').includes('parser bug')) {
-        throw new Error('the title prompt does not carry the session prompt');
+      // A digest of the whole session, not its first prompt: the exchange's own
+      // answer is in there too, shaped the way the engine's digest is.
+      const described = String(JSON.parse(titleRequest.body).messages?.[1]?.content ?? '');
+      if (!described.includes('user: please fix the parser bug')) {
+        throw new Error(`the title prompt lost the user turn: ${JSON.stringify(described.slice(0, 160))}`);
+      }
+      if (!described.includes('assistant: the answer')) {
+        throw new Error(`the title prompt lost the assistant turn: ${JSON.stringify(described.slice(0, 160))}`);
       }
       await waitFor(
         () =>
@@ -1841,6 +1847,48 @@ test('/title without an argument generates one with the session model and publis
       if (entry?.title !== 'Parser Bug Fix') throw new Error(`session/list title: ${JSON.stringify(entry?.title)}`);
     },
   );
+});
+
+test('/title summarizes a restored session from its history', async () => {
+  const provider = await startFakeProvider({
+    script: [{ kind: 'text', text: 'the parser is fixed' }],
+    titleScript: [{ kind: 'text', text: 'Restored Title' }],
+  });
+  const homeDir = writeFakeHome({ baseUrl: provider.baseUrl });
+  const workDir = mkdtempSync(join(tmpdir(), 'kimi-acp-suite-'));
+  const spawn = () => spawnAgent(mainPath, { homeDir, env: { KIMI_ACP_DEBUG: '1' } });
+  let agent = spawn();
+  try {
+    await boot(agent);
+    const sessionId = await newSession(agent, workDir);
+    await prompt(agent, sessionId, 'please fix the parser bug');
+    await agent.close();
+
+    // A fresh process has no first prompt in memory: the digest comes from the
+    // session's own history, as the engine reads it.
+    agent = spawn();
+    await boot(agent);
+    await agent.request('session/load', { sessionId, cwd: workDir, mcpServers: [] });
+    const { text } = await runCommand(agent, sessionId, '/title');
+    if (!text.includes('Restored Title')) throw new Error(`reply: ${JSON.stringify(text)}`);
+    const titleRequest = provider.requests.find((request) => {
+      try {
+        return JSON.parse(request.body)?.stream === false;
+      } catch {
+        return false;
+      }
+    });
+    if (titleRequest === undefined) throw new Error('no title request reached the provider');
+    const described = String(JSON.parse(titleRequest.body).messages?.[1]?.content ?? '');
+    if (!described.includes('please fix the parser bug')) {
+      throw new Error(`the digest lost the restored prompt: ${JSON.stringify(described.slice(0, 160))}`);
+    }
+  } finally {
+    await agent.close();
+    await provider.close();
+    rmSync(homeDir, { recursive: true, force: true });
+    rmSync(workDir, { recursive: true, force: true });
+  }
 });
 
 test('/title is repeatable and follows the session model', async () => {

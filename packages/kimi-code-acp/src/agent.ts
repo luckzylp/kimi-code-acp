@@ -90,7 +90,7 @@ import {
   type UnsubscribeRequest,
 } from './session-index';
 
-import { generateTitle, withTitleLock } from './title';
+import { conversationDigest, generateTitle, withTitleLock } from './title';
 import { readClientCapabilities, type ClientCapabilities } from './capabilities';
 import {
   availableBuiltinCommands,
@@ -1183,30 +1183,33 @@ function keepExistingTitle(entry: SessionEntry): void {
   if (displayTitle(entry.session.summary) !== undefined) entry.titled = true;
 }
 /**
- * Generate a title for this session, from its own prompt, with the model the
- * session is using. Manual only: nothing titles a thread behind the user's
- * back, and the result reaches the client the same way any rename does —
- * `session.meta.updated` from the engine, forwarded as `session_info_update`.
+ * Generate a title that summarizes this session, with the model the session is
+ * using. Manual only: nothing titles a thread behind the user's back, and the
+ * result reaches the client the same way any rename does — `session.meta.updated`
+ * from the engine, forwarded as `session_info_update`.
  *
- * The engine's own generator answers first: for a signed-in Kimi account it
+ * The engine's own generator answers first, with its `digest` source — the
+ * whole conversation, not the first prompt: for a signed-in Kimi account it
  * runs on the managed model, and it is the one that keeps working when the
  * session's model has no endpoint the adapter can call. Custom providers get
- * `provider_unavailable` there, so the session's own model is asked directly.
+ * `provider_unavailable` there, so the session's own model is asked directly,
+ * with a digest the adapter reads from the session's own history.
  */
 export async function generateSessionTitle(
   state: AgentState,
   entry: SessionEntry,
 ): Promise<string | undefined> {
   const harness = await harnessOf(state);
-  const prompt = entry.firstUserText?.trim() ?? '';
   const engineTitle = await harness
-    .generateSessionTitle({ id: entry.session.id, source: 'user_prompts' })
+    .generateSessionTitle({ id: entry.session.id, source: 'digest' })
     .catch(() => undefined);
   if (engineTitle !== undefined) return engineTitle;
-  if (prompt.length === 0) return undefined;
+  const context = await entry.session.getContext().catch(() => undefined);
+  const digest = context === undefined ? undefined : conversationDigest(context.history);
+  if (digest === undefined) return undefined;
   const config = await harness.getConfig();
   const status = await entry.session.getStatus().catch(() => undefined);
-  return generateTitle(config, status?.model, prompt);
+  return generateTitle(config, status?.model, digest);
 }
 export function cancel(state: AgentState, params: CancelNotification): void {
   state.sessions.get(params.sessionId)?.bridge.cancel();

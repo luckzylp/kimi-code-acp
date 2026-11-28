@@ -1,7 +1,65 @@
 import { describe, expect, it } from 'vitest';
 
 import { displayTitle, isPublishableTitle } from '../src/session';
-import { fallbackTitle, resolveTitleModel, withTitleLock } from '../src/title';
+import { conversationDigest, fallbackTitle, MAX_TITLE_DIGEST_CHARS, resolveTitleModel, withTitleLock } from '../src/title';
+
+describe('conversationDigest', () => {
+  const user = (text: string, origin?: { kind: string }) => ({
+    role: 'user',
+    content: [{ type: 'text', text }],
+    ...(origin === undefined ? {} : { origin }),
+  });
+  const assistant = (text: string) => ({ role: 'assistant', content: [{ type: 'text', text }] });
+
+  it('summarizes every exchange, not just the first prompt', () => {
+    const digest = conversationDigest([
+      user('fix the parser'),
+      assistant('done, the parser handles quotes now'),
+      user('now the linter'),
+      assistant('linter passes'),
+    ]);
+    expect(digest).toBe(
+      'user: fix the parser\nassistant: done, the parser handles quotes now\nuser: now the linter\nassistant: linter passes',
+    );
+  });
+
+  it('keeps the last answer of an exchange, and collapses whitespace', () => {
+    const digest = conversationDigest([
+      user('  fix\n\nthe   parser '),
+      assistant('first answer'),
+      assistant('final answer'),
+    ]);
+    expect(digest).toBe('user: fix the parser\nassistant: final answer');
+  });
+
+  it('skips prompts the user did not type', () => {
+    const digest = conversationDigest([
+      user('continue the goal', { kind: 'system_trigger' }),
+      assistant('working'),
+      user('what changed?'),
+      assistant('the parser'),
+    ]);
+    expect(digest).toBe('user: what changed?\nassistant: the parser');
+  });
+
+  it('keeps both ends when the conversation does not fit', () => {
+    const turns = Array.from({ length: 40 }, (_, index) => [
+      user(`question ${index} ${'x'.repeat(150)}`),
+      assistant(`answer ${index} ${'y'.repeat(150)}`),
+    ]).flat();
+    const digest = conversationDigest(turns);
+    expect(digest).toBeDefined();
+    expect(digest!.length).toBeLessThanOrEqual(MAX_TITLE_DIGEST_CHARS);
+    expect(digest!.startsWith('user: question 0')).toBe(true);
+    expect(digest!.includes('...')).toBe(true);
+    expect(digest!.endsWith('y'.repeat(150))).toBe(true);
+  });
+
+  it('has nothing to say about a session with no conversation', () => {
+    expect(conversationDigest([])).toBeUndefined();
+    expect(conversationDigest([user('   ')])).toBeUndefined();
+  });
+});
 
 describe('displayTitle', () => {
   it('trusts the kind a live or restored session carries', () => {

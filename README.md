@@ -86,13 +86,14 @@ verified end to end.** Present today:
   live turn produces, with injected reminders (`<system-reminder>`,
   `<task-notification>`) stripped and engine-started turns introduced by the
   same one-line note they get live
-- **session titles**: generated on request only — `/title` (no argument) asks
-  the session's own model for a short title from the session's first prompt and
-  renames the session, so `session_info_update {title, updatedAt}` reaches the
-  client; `/title <text>` sets one outright. Nothing titles a thread on its own,
-  and the engine's prompt-derived placeholder is never published. A signed-in
+- **session titles**: generated on request only — `/title` (no argument)
+  summarizes the whole conversation (every user turn and its final answer, the
+  way the engine's title digest does, elided to 3000 characters) with the
+  session's own model, and renames the session, so `session_info_update {title,
+  updatedAt}` reaches the client; `/title <text>` sets one outright. A signed-in
   Kimi account is titled by the engine's own generator (the managed provider);
-  custom endpoints are asked directly. `session/set_title` (and the AIR
+  custom endpoints are asked directly. Nothing titles a thread on its own, and
+  the engine's prompt-derived placeholder is never published. `session/set_title` (and the AIR
   `_session/rename`) also work; `sessionCapabilities` advertises
   list/delete/fork/resume/close/title
 - **session surface**: model / thinking / mode config options,
@@ -239,7 +240,7 @@ for session, reject, cancel-in-dialog), shadow terminals, declared and
 client-hosted MCP servers, goal control, config options and modes, reload after a rewind, concurrent
 sessions, workspace skills, every
 supported TUI command with normal and failing arguments, and the v2 draft —
-96 cases against a real engine and a fake provider. The expectations come from Zed's client
+97 cases against a real engine and a fake provider. The expectations come from Zed's client
 ([`docs/zed-acp-behavior.md`](docs/zed-acp-behavior.md)), so the suite doubles
 as a record of what the client actually needs.
 
