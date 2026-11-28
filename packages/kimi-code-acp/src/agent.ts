@@ -90,7 +90,7 @@ import {
   type UnsubscribeRequest,
 } from './session-index';
 
-import { fallbackTitle, generateTitle, withTitleLock } from './title';
+import { generateTitle, withTitleLock } from './title';
 import { readClientCapabilities, type ClientCapabilities } from './capabilities';
 import {
   availableBuiltinCommands,
@@ -113,7 +113,7 @@ import { log } from './log';
 import { listProviders } from './providers';
 import { McpBridge } from './mcp-bridge';
 import { buildPrompt } from './prompt';
-import { projectReplay, replayedUserMessageIds, type ReplayRecord } from './replay';
+import { firstUserText, projectReplay, replayedUserMessageIds, type ReplayRecord } from './replay';
 import {
   parseRewindRequest,
   REWIND_METHOD,
@@ -136,14 +136,10 @@ import { AGENT_NAME, VERSION } from './version';
 const PROTOCOL_VERSION = 1;
 
 /** How many completed turns may end without a title before this session stops asking. */
-const MAX_TITLE_ATTEMPTS = 3;
 
 interface SessionEntry {
   readonly session: KimiSession;
   readonly bridge: SessionBridge;
-  titleAttempts: number;
-  /** The title request in flight, so a turn end does not ask a second time. */
-  titleInFlight?: Promise<void>;
   /** Serializes every rename of this session: the last writer is the user's. */
   titleLock: Promise<void>;
   titled: boolean;
@@ -260,6 +256,8 @@ export function initializeResponse(capabilities?: ClientCapabilities): Initializ
       promptCapabilities: { image: true, embeddedContext: true },
       // stdio is always available; these are the remote transports we can run.
       mcpCapabilities: { http: true, sse: true },
+      // `logout` is callable, as in the official server.
+      auth: { logout: {} },
       // providers/list is served read-only; see providers.ts.
       providers: {},
       // Optional session methods this agent implements, so a client can gate
@@ -465,7 +463,7 @@ async function registerSession(state: AgentState, session: KimiSession): Promise
   });
   wireApprovals(state, bridge, session);
   wireQuestions(state, bridge, session);
-  const entry: SessionEntry = { session, bridge, titleAttempts: 0, titled: false, titleLock: Promise.resolve() };
+  const entry: SessionEntry = { session, bridge, titled: false, titleLock: Promise.resolve() };
   state.sessions.set(session.id, entry);
   return entry;
 }
@@ -516,6 +514,9 @@ async function loadSession(state: AgentState, params: LoadSessionRequest): Promi
   const entry = await registerSession(state, session);
   keepExistingTitle(entry);
   const records = (session.getResumeState()?.agents?.['main']?.replay ?? []) as unknown as ReplayRecord[];
+  // `/title` generates from the session's own prompt, which a restored session
+  // no longer has in memory: the replay carries it.
+  entry.firstUserText ??= firstUserText(records);
   for (const notification of projectReplay(params.sessionId, records)) {
     await entry.bridge.post(notification);
   }
@@ -886,15 +887,19 @@ export async function authenticate(
   if (params.methodId !== LOGIN_METHOD_ID) {
     throw RequestError.invalidParams({ methodId: params.methodId }, 'Unknown auth method');
   }
+  // The official server's `authenticate` only checks the method and confirms
+  // the account is ready: the device flow itself runs in the terminal the
+  // client opened for the terminal auth method. A client that calls this
+  // without signing in gets the same `authRequired` the official one raises.
   const harness = await harnessOf(state);
-  await harness.auth.login(undefined, {
-    onDeviceCode: (authorization) => {
-      log.warn('acp: device login required', {
-        url: authorization.verificationUriComplete,
-        code: authorization.userCode,
-      });
-    },
-  });
+  const status = await harness.auth.status().catch(() => undefined);
+  const signedIn = status?.providers.some((provider) => provider.hasToken) === true;
+  if (!signedIn) {
+    throw RequestError.authRequired(
+      undefined,
+      'Not signed in. Run the login auth method (kimi-acp --login) in a terminal.',
+    );
+  }
   log.info('acp: signed in with a Kimi account');
   // The login provisions the managed provider and its models in the config, so
   // every open session has new model options to show - and from here on the
@@ -1055,6 +1060,7 @@ export async function prompt(
         entry.titled = true;
       });
     },
+    generateTitle: () => generateSessionTitle(state, entry),
   };
   let parts: readonly PromptPart[] = built.parts;
   const slash = built.text.length === 0 ? null : parseSlashCommand(built.text);
@@ -1129,17 +1135,10 @@ export async function prompt(
       .trim();
     if (text.length > 0) entry.firstUserText = text;
   }
-  // Ask for the title now, not at turn end: the model answers in seconds,
-  // while the turn itself can run for minutes, and a client that waits for it
-  // shows an untitled thread the whole time (claude-code-acp titles from the
-  // prompt for the same reason). A prompt too short to title from waits for
-  // the turn's answer.
-  void maybeGenerateTitle(state, entry, 'prompt');
   try {
     const stopReason = await entry.bridge.prompt(parts, skill);
     if (stopReason === 'end_turn') {
       void entry.bridge.emitUsage();
-      void maybeGenerateTitle(state, entry, 'turn');
       void notifyListChange(state, entry.session.id);
     }
     return { stopReason };
@@ -1183,90 +1182,32 @@ async function matchSkill(
 function keepExistingTitle(entry: SessionEntry): void {
   if (displayTitle(entry.session.summary) !== undefined) entry.titled = true;
 }
-
-/** Below this a prompt says too little to title from: wait for the turn. */
-const MIN_TITLE_PROMPT_CHARS = 10;
-
 /**
- * Title generation is best-effort and never delays the turn.
+ * Generate a title for this session, from its own prompt, with the model the
+ * session is using. Manual only: nothing titles a thread behind the user's
+ * back, and the result reaches the client the same way any rename does —
+ * `session.meta.updated` from the engine, forwarded as `session_info_update`.
  *
- * It runs twice at most per session: once as soon as the prompt is in flight,
- * from the prompt text alone (the answer in seconds, where a turn can run for
- * minutes — claude-code-acp titles from the prompt for the same reason), and
- * once at turn end for a prompt too short to title from, which has its answer
- * by then. The engine's own generator only serves the managed Kimi Code OAuth
- * provider; for every other provider it returns `provider_unavailable`, so the
- * session's own model is asked directly and the first user line is the
- * fallback. The engine emits `session.meta.updated` after the rename, and the
- * bridge forwards it as `session_info_update`.
+ * The engine's own generator answers first: for a signed-in Kimi account it
+ * runs on the managed model, and it is the one that keeps working when the
+ * session's model has no endpoint the adapter can call. Custom providers get
+ * `provider_unavailable` there, so the session's own model is asked directly.
  */
-async function maybeGenerateTitle(
+export async function generateSessionTitle(
   state: AgentState,
   entry: SessionEntry,
-  when: 'prompt' | 'turn',
-): Promise<void> {
-  if (entry.titled || entry.titleAttempts >= MAX_TITLE_ATTEMPTS) return;
-  if (entry.titleInFlight !== undefined) return;
-  // A restored session whose title is the engine's placeholder is untitled for
-  // us; one with a real title keeps it (`keepExistingTitle`).
-  if (entry.session.summary?.titleKind === 'custom') return;
+): Promise<string | undefined> {
+  const harness = await harnessOf(state);
   const prompt = entry.firstUserText?.trim() ?? '';
-  if (prompt.length === 0) return;
-  // The prompt alone is the description; "hi" is not one, so that session is
-  // titled once its answer is in.
-  if (when === 'prompt' && prompt.length < MIN_TITLE_PROMPT_CHARS) return;
-  entry.titleAttempts += 1;
-  entry.titleInFlight = attemptTitle(state, entry, prompt, when === 'prompt' ? 'user_prompts' : 'first_turn');
-  try {
-    await entry.titleInFlight;
-  } finally {
-    entry.titleInFlight = undefined;
-  }
+  const engineTitle = await harness
+    .generateSessionTitle({ id: entry.session.id, source: 'user_prompts' })
+    .catch(() => undefined);
+  if (engineTitle !== undefined) return engineTitle;
+  if (prompt.length === 0) return undefined;
+  const config = await harness.getConfig();
+  const status = await entry.session.getStatus().catch(() => undefined);
+  return generateTitle(config, status?.model, prompt);
 }
-
-async function attemptTitle(
-  state: AgentState,
-  entry: SessionEntry,
-  prompt: string,
-  source: 'user_prompts' | 'first_turn',
-): Promise<void> {
-  const sessionId = entry.session.id;
-  try {
-    const harness = await harnessOf(state);
-    // The engine's own generator is the good one — it runs against the managed
-    // Kimi account and only serves a signed-in user — and it needs the source
-    // that fits the moment: the prompts before a turn, the first exchange
-    // after it (its `first_turn` input requires the assistant's answer).
-    const engineTitle = await harness
-      .generateSessionTitle({ id: sessionId, source })
-      .catch(() => undefined);
-    if (engineTitle !== undefined) {
-      entry.titled = true;
-      return;
-    }
-    const config = await harness.getConfig();
-    if (config.autoSessionTitle === false) return;
-    const status = await entry.session.getStatus().catch(() => undefined);
-    let title = await generateTitle(config, status?.model, prompt);
-    title ??= fallbackTitle(prompt);
-    if (title === undefined) return;
-    // The request can take half a minute; a title the user set meanwhile (or a
-    // `/title` in the same window) wins over the generated one, and the lock
-    // puts this rename before any later one.
-    await withTitleLock(entry, async () => {
-      if (entry.titled) return;
-      await harness.renameSession({ id: sessionId, title });
-      entry.titled = true;
-    });
-    log.info('acp: session title generated', { sessionId, title });
-  } catch (error) {
-    log.warn('acp: session title generation failed', {
-      sessionId,
-      error: error instanceof Error ? error.message : String(error),
-    });
-  }
-}
-
 export function cancel(state: AgentState, params: CancelNotification): void {
   state.sessions.get(params.sessionId)?.bridge.cancel();
 }

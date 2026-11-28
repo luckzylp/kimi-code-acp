@@ -222,7 +222,7 @@ One row per engine signal. "Entity" is what the client renders.
 | `swarm_mode.enter/exit` | `current_mode_update` | mode picker | swarm is a mode from the client's point of view |
 | swarm member turn | synthetic `swarm_<member>` card | tool card | `parentToolCallId` links it to the `AgentSwarm` call; v2 subagents when the client advertises them |
 | `usage.*` | `usage_update` | context indicator | on setup, model switch, after compaction, and at run end |
-| `metadata.changed` / generated title | `session_info_update` | thread title | deduplicated |
+| `metadata.changed` / user-set title | `session_info_update` | thread title | deduplicated; the engine's prompt-derived placeholder is dropped |
 | compaction events | `agent_message_chunk` | system line | as upstream does |
 | run settled without a client prompt | `user_message_chunk` note | user bubble | only for turns outside any run (Decision 2, rule 2) |
 | any of the above with rich state | `_meta` on the same update | *invisible* | namespace `kimi.*`; never the only carrier of information a user needs |
@@ -308,7 +308,7 @@ The chain was re-validated on 2026-11-26 against `@moonshot-ai/kimi-code@2.8.1`
 | goal / subagent cards | `node scripts/test.mjs` | unit tests cover card ids, lifecycle status mapping, budget text, subagent states |
 | wire contract | `node scripts/test.mjs` | every v1/v2 update, config option and handshake the adapter emits parses with the ACP SDK's zod schemas |
 | goal extension | `node scripts/e2e.mjs` | `_session/goal set` opens the goal card, `/goal status` reads it, `_session/goal clear` closes it |
-| protocol suite | `node scripts/protocol-suite.mjs` | 94 cases: handshake, lifecycle (new/load/resume/fork/delete/close), prompts, cancel/steering, permission kinds, terminals, declared + hosted MCP (including a failing server), goal, cursors + rewind (including a reload after rewind), concurrent sessions, workspace skills, structured notices, compaction shapes, AIR meta/goal/rename, provider mutations, modes auto/yolo/default via set_mode, thinking option, /tower, logout, the remaining TUI-parity commands (normal + failing), v2 lifecycle/steering/goal and its errors, malformed JSON-RPC frames, custom API keys, session titles (AI + fallback), native subagent sessions, AIR session index, long shell command cards, a run held open by an auto-backgrounded command, a prompt steered into that held run |
+| protocol suite | `node scripts/protocol-suite.mjs` | 96 cases: handshake, lifecycle (new/load/resume/fork/delete/close), prompts, cancel/steering, permission kinds, terminals, declared + hosted MCP (including a failing server), goal, cursors + rewind (including a reload after rewind), concurrent sessions, workspace skills, structured notices, compaction shapes, AIR meta/goal/rename, provider mutations, modes auto/yolo/default via set_mode, thinking option, /tower, logout, the remaining TUI-parity commands (normal + failing), v2 lifecycle/steering/goal and its errors, malformed JSON-RPC frames, custom API keys, session titles (AI + fallback), native subagent sessions, AIR session index, long shell command cards, a run held open by an auto-backgrounded command, a prompt steered into that held run |
 | protocol cancel | `node scripts/e2e.mjs` | `$/cancel_request` cancels the prompt it names |
 | replay plan | `node scripts/e2e.mjs` | `session/load` restores the plan from the TodoList call in history |
 | install tree | `node scripts/pack.mjs` | 2.6 MB tarball, installed `node_modules` + lockfile, handshake from the installed copy |

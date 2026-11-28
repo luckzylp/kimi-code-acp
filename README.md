@@ -86,18 +86,19 @@ verified end to end.** Present today:
   live turn produces, with injected reminders (`<system-reminder>`,
   `<task-notification>`) stripped and engine-started turns introduced by the
   same one-line note they get live
-- **session titles**: after the first completed turn the adapter asks the
-  session's own model for a short title and renames the session, so
-  `session_info_update {title, updatedAt}` reaches the client (the engine's own
-  generator only serves the managed Kimi Code OAuth provider, so custom
-  endpoints get nothing from it; the first user line is the fallback when the
-  provider cannot answer, and `autoSessionTitle = false` turns the feature
-  off). `session/set_title` (and the AIR `_session/rename`) also work;
-  `sessionCapabilities` advertises list/delete/fork/resume/close/title
+- **session titles**: generated on request only — `/title` (no argument) asks
+  the session's own model for a short title from the session's first prompt and
+  renames the session, so `session_info_update {title, updatedAt}` reaches the
+  client; `/title <text>` sets one outright. Nothing titles a thread on its own,
+  and the engine's prompt-derived placeholder is never published. A signed-in
+  Kimi account is titled by the engine's own generator (the managed provider);
+  custom endpoints are asked directly. `session/set_title` (and the AIR
+  `_session/rename`) also work; `sessionCapabilities` advertises
+  list/delete/fork/resume/close/title
 - **session surface**: model / thinking / mode config options,
   `session/set_config_option`, `session/set_mode`, skills advertised as slash
   commands, `usage_update` after setup and each turn, and
-  `session_info_update` from generated titles
+  `session_info_update` from a title the user generated or set
 - **prompt content**: text, images (attached to the engine's media store),
   `resource_link` files read on the host and inlined, and embedded resources
 - **cancellation everywhere**: a run, and a permission dialog left open when the
@@ -238,7 +239,7 @@ for session, reject, cancel-in-dialog), shadow terminals, declared and
 client-hosted MCP servers, goal control, config options and modes, reload after a rewind, concurrent
 sessions, workspace skills, every
 supported TUI command with normal and failing arguments, and the v2 draft —
-94 cases against a real engine and a fake provider. The expectations come from Zed's client
+96 cases against a real engine and a fake provider. The expectations come from Zed's client
 ([`docs/zed-acp-behavior.md`](docs/zed-acp-behavior.md)), so the suite doubles
 as a record of what the client actually needs.
 

@@ -22,6 +22,8 @@ export interface CommandRuntime {
   readonly harness: KimiHarness;
   /** Rename the session; a title the user chose is final. */
   readonly setTitle?: ((title: string) => Promise<void>) | undefined;
+  /** Generate a title from the session's own prompt with its model. */
+  readonly generateTitle?: (() => Promise<string | undefined>) | undefined;
 }
 
 export interface CommandReply {
@@ -201,31 +203,21 @@ const UNDO: SlashCommandSpec = {
 
 const TITLE: SlashCommandSpec = {
   name: 'title',
-  description: 'Rename this session',
-  argumentHint: '<title>',
+  description: 'Generate a title, or rename this session',
+  argumentHint: '[title]',
   run: async (runtime, args) => {
-    const title = args.trim();
-    if (title.length === 0) return { text: 'Usage: /title <title>' };
-    await (runtime.setTitle?.(title) ?? runtime.harness.renameSession({ id: runtime.sessionId, title }));
-    return { text: `Renamed to "${title}".` };
-  },
-};
-
-const LOGIN: SlashCommandSpec = {
-  name: 'login',
-  description: 'Show the Kimi account this agent is signed in with',
-  run: async (runtime) => {
-    const status = await runtime.harness.auth.status();
-    const managed = status.providers.find((provider) => provider.providerName === 'managed:kimi-code');
-    if (managed?.hasToken === true) {
-      return { text: `Signed in with a Kimi account (${managed.providerName}).` };
+    const given = args.trim();
+    const title = given.length === 0 ? await runtime.generateTitle?.() : given;
+    if (title === undefined || title.length === 0) {
+      return {
+        text:
+          given.length === 0
+            ? 'Could not generate a title: this session has no prompt to generate it from, or its model did not answer.'
+            : 'Usage: /title <title>',
+      };
     }
-    return {
-      text:
-        'Not signed in with a Kimi account. Use the client\'s sign-in action, or run `kimi-acp login` ' +
-        'in a terminal. Custom providers work without it; the Kimi account is what lets the engine ' +
-        'title sessions and use its own models.',
-    };
+    await (runtime.setTitle?.(title) ?? runtime.harness.renameSession({ id: runtime.sessionId, title }));
+    return { text: `Session title: "${title}".` };
   },
 };
 
@@ -309,7 +301,6 @@ export const BUILTIN_COMMANDS: readonly SlashCommandSpec[] = [
   INIT,
   UNDO,
   TITLE,
-  LOGIN,
   ADD_DIR,
   TASKS,
   MCP,

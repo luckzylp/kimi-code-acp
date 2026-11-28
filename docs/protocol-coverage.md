@@ -134,7 +134,12 @@ for registry agents, or AIR moving to v2). Checklist:
   so a text block sent later (streamed arguments, the result) would take the
   terminal off the card and leave the output as prose. Cards without a terminal
   get the result as fenced text.
-- **Session titles**: the engine names an untitled session after its first
+- **Session titles** (manual): `/title` with no argument generates one from
+  the session's first prompt with the session's own model and renames the
+  session; `/title <text>` sets one. Nothing is generated on its own — a prompt
+  leaves the thread untitled — and `session/set_title`, `_session/rename` and
+  `session/load`'s stored title behave as before.
+- **Session titles (engine placeholder)**: the engine names an untitled session after its first
   prompt (a `session.meta.updated` placeholder carrying `lastPrompt`); the
   adapter does not publish that, so a thread is never named after the user's
   first message. The title comes from the session's own model after the first

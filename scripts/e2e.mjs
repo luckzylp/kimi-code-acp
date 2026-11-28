@@ -216,7 +216,9 @@ async function surfaceScenario() {
     }
     const authMethods = init.authMethods ?? [];
     const login = authMethods.find((method) => method.id === 'login');
-    if (login === undefined || login.type !== 'terminal' || !(login.args ?? []).includes('login')) {
+    // The official server's terminal method spawns `--login`; dropping it would
+    // send the client down the device-flow subcommand's own argument parsing.
+    if (login === undefined || login.type !== 'terminal' || !(login.args ?? []).includes('--login')) {
       throw new Error('initialize did not advertise the terminal login method');
     }
     ok('initialize advertises the terminal login method');

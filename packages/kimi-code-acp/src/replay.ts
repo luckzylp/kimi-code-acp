@@ -164,6 +164,21 @@ function userChunk(sessionId: string, text: string, messageId?: string): Session
 }
 
 /** Ids of the user prompts in a replay, in order, for cursor announcements. */
+/**
+ * The first thing the user said in a replayed history, as a title is generated
+ * from it. Engine-started prompts are skipped: they are not the user's words.
+ */
+export function firstUserText(records: readonly ReplayRecord[]): string | undefined {
+  for (const record of records) {
+    if (record.type !== 'message') continue;
+    const message = record.message;
+    if (message?.role !== 'user' || isAutonomousOrigin(message.origin)) continue;
+    const text = stripInjectedMarkers(textOf(message.content) ?? '').trim();
+    if (text.length > 0) return text;
+  }
+  return undefined;
+}
+
 export function replayedUserMessageIds(records: readonly ReplayRecord[]): string[] {
   const ids: string[] = [];
   for (const record of records) {

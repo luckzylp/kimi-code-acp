@@ -410,7 +410,8 @@ const commandCases = [
   ['/swarm on enables swarm mode', '/swarm on', (text) => text.includes('Swarm mode on')],
   ['/swarm off disables swarm mode', '/swarm off', (text) => text.includes('Swarm mode off')],
   ['/title sets a title', '/title Suite Title', (text) => text.includes('Suite Title')],
-  ['/title without text explains usage', '/title', (text) => text.includes('Usage: /title')],
+  // `/title` with no argument generates; with nothing to generate from it says so.
+  ['/title without text reports the missing prompt', '/title', (text) => text.includes('Could not generate a title')],
   ['/add-dir adds a directory', '/add-dir /tmp', (text) => text.includes('Added /tmp')],
   ['/add-dir without a path explains usage', '/add-dir', (text) => text.includes('Usage: /add-dir')],
   ['/tasks lists background tasks', '/tasks', (text) => /background tasks|\[/i.test(text)],
@@ -1697,18 +1698,29 @@ test('a custom API key from the environment reaches the provider', async () => {
   }
 });
 
-test('/login reports the sign-in state', async () => {
-  await withAgent({ script: [] }, async ({ agent, workDir }) => {
-    await boot(agent);
-    const sessionId = await newSession(agent, workDir);
-    const { text } = await runCommand(agent, sessionId, '/login');
-    // No Kimi account in the fake home: the command says how to get one and
-    // that custom providers work without it.
-    if (!text.includes('Not signed in')) throw new Error(`login status: ${JSON.stringify(text)}`);
-    if (!text.includes('kimi-acp login')) throw new Error('the hint does not name the login command');
+test('the auth surface matches the official server: terminal login, logout capability', async () => {
+  await withAgent({ script: [] }, async ({ agent }) => {
+    const init = await agent.request('initialize', { protocolVersion: 1, clientCapabilities: zedCapabilities() });
+    const login = (init.authMethods ?? []).find((method) => method.id === 'login');
+    if (login === undefined) throw new Error('no login method');
+    if (login.type !== 'terminal') throw new Error(`login type ${JSON.stringify(login.type)}`);
+    // The official server spawns the flow with `--login`; ours accepts both.
+    if (JSON.stringify(login.args) !== '["--login"]') throw new Error(`args ${JSON.stringify(login.args)}`);
+    if (init.agentCapabilities?.auth?.logout === undefined) {
+      throw new Error('the logout capability is not advertised');
+    }
+    // `authenticate` only confirms the account is ready, as the official one
+    // does: with no account in the fake home it answers authRequired.
+    await expectReject(
+      agent.request('authenticate', { methodId: 'login' }, 5_000),
+      'authenticate without an account',
+    );
+    await expectReject(
+      agent.request('authenticate', { methodId: 'nope' }, 5_000),
+      'an unknown auth method',
+    );
   });
 });
-
 test('/goal runs the objective as the goal\'s first turn and keeps the prompt open until cancelled', async () => {
   await withAgent(
     {
@@ -1768,32 +1780,45 @@ test('session/set_title sets the title and emits session info', async () => {
   });
 });
 
-// --- auto session titles ---------------------------------------------------
+// --- session titles --------------------------------------------------------
 
-test('a generated title becomes the session_info_update title', async () => {
+test('no title is generated on its own: a prompt leaves the thread untitled', async () => {
   await withAgent(
     {
       script: [{ kind: 'text', text: 'the answer' }],
-      titleScript: [{ kind: 'text', text: 'Short Generated Title' }],
-      autoSessionTitle: true,
+      titleScript: [{ kind: 'text', text: 'Never Used' }],
     },
     async ({ agent, provider, workDir }) => {
       await boot(agent);
       const sessionId = await newSession(agent, workDir);
       await prompt(agent, sessionId, 'please fix the parser bug');
-      await waitFor(
-        () =>
-          updates(agent).some(
-            (update) => update.sessionUpdate === 'session_info_update' && update.title === 'Short Generated Title',
-          ),
-        'the generated title',
-      );
-      const listed = await agent.request('session/list', {});
-      const entry = listed.sessions.find((session) => session.sessionId === sessionId);
-      if (entry?.title !== 'Short Generated Title') {
-        throw new Error(`session/list title: ${JSON.stringify(entry?.title)}`);
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 600));
+      // Generating a title is a decision the user makes, not a side effect of
+      // sending a message: no model call for one, and no session_info_update.
+      if (provider.requests.length !== 1) {
+        throw new Error(`expected the turn's one request, got ${provider.requests.length}`);
       }
-      const titleRequest = provider.requests.find((request) => {
+      const info = updates(agent).filter((update) => update.sessionUpdate === 'session_info_update');
+      if (info.length !== 0) throw new Error(`a title appeared unasked: ${JSON.stringify(info)}`);
+    },
+  );
+});
+
+test('/title without an argument generates one with the session model and publishes it', async () => {
+  await withAgent(
+    {
+      script: [{ kind: 'text', text: 'the answer' }],
+      titleScript: [{ kind: 'text', text: 'Parser Bug Fix' }],
+    },
+    async ({ agent, provider, workDir }) => {
+      await boot(agent);
+      const sessionId = await newSession(agent, workDir);
+      await prompt(agent, sessionId, 'please fix the parser bug');
+      const before = provider.requests.length;
+      const { text } = await runCommand(agent, sessionId, '/title');
+      if (!text.includes('Parser Bug Fix')) throw new Error(`reply: ${JSON.stringify(text)}`);
+      // The session's own model was asked, with the prompt as the description.
+      const titleRequest = provider.requests.slice(before).find((request) => {
         try {
           return JSON.parse(request.body)?.stream === false;
         } catch {
@@ -1801,40 +1826,71 @@ test('a generated title becomes the session_info_update title', async () => {
         }
       });
       if (titleRequest === undefined) throw new Error('no title request reached the provider');
-      if (titleRequest.headers?.authorization !== 'Bearer test-token') {
-        throw new Error(`title request auth: ${JSON.stringify(titleRequest.headers?.authorization)}`);
+      if (!String(JSON.parse(titleRequest.body).messages?.[1]?.content ?? '').includes('parser bug')) {
+        throw new Error('the title prompt does not carry the session prompt');
       }
-      const titleBody = JSON.parse(titleRequest.body);
-      if (!String(titleBody.messages?.[1]?.content ?? '').includes('parser bug')) {
-        throw new Error('the title prompt does not carry the first user text');
-      }
+      await waitFor(
+        () =>
+          updates(agent).some(
+            (update) => update.sessionUpdate === 'session_info_update' && update.title === 'Parser Bug Fix',
+          ),
+        'the session_info_update title',
+      );
+      const listed = await agent.request('session/list', {});
+      const entry = listed.sessions.find((session) => session.sessionId === sessionId);
+      if (entry?.title !== 'Parser Bug Fix') throw new Error(`session/list title: ${JSON.stringify(entry?.title)}`);
     },
   );
 });
 
-test('a title the user sets during the first turn is not overwritten by the generated one', async () => {
+test('/title is repeatable and follows the session model', async () => {
   await withAgent(
     {
       script: [{ kind: 'text', text: 'the answer' }],
-      titleScript: [{ kind: 'text', text: 'GENERATED OVERWRITE' }],
-      autoSessionTitle: true,
-      delayMs: 1500,
-      titleDelayMs: 1500,
+      titleScript: [{ kind: 'text', text: 'First Title' }, { kind: 'text', text: 'Second Title' }],
     },
     async ({ agent, workDir }) => {
       await boot(agent);
       const sessionId = await newSession(agent, workDir);
       await prompt(agent, sessionId, 'please fix the parser bug');
-      // The title request is still in flight (the fake provider answers slowly),
-      // so this rename lands first.
-      await agent.request('session/set_title', { sessionId, title: 'My Own Title' });
-      await new Promise((resolvePromise) => setTimeout(resolvePromise, 4000));
-      const titles = updates(agent)
-        .filter((update) => update.sessionUpdate === 'session_info_update')
-        .map((update) => update.title);
-      // The generated title may land first (it is asked for at prompt time);
-      // what must never happen is it landing after the user's.
-      if (titles.at(-1) !== 'My Own Title') throw new Error(`titles: ${JSON.stringify(titles)}`);
+      await runCommand(agent, sessionId, '/title');
+      await waitFor(
+        () => updates(agent).some((update) => update.sessionUpdate === 'session_info_update' && update.title === 'First Title'),
+        'the first title',
+      );
+      await runCommand(agent, sessionId, '/title');
+      await waitFor(
+        () => updates(agent).some((update) => update.sessionUpdate === 'session_info_update' && update.title === 'Second Title'),
+        'the second title',
+      );
+    },
+  );
+});
+
+test('/title reports when there is nothing to generate from', async () => {
+  await withAgent({ script: [] }, async ({ agent, workDir }) => {
+    await boot(agent);
+    const sessionId = await newSession(agent, workDir);
+    const { text } = await runCommand(agent, sessionId, '/title');
+    if (!text.includes('Could not generate a title')) throw new Error(`reply: ${JSON.stringify(text)}`);
+    const info = updates(agent).filter((update) => update.sessionUpdate === 'session_info_update');
+    if (info.length !== 0) throw new Error(`a title was set anyway: ${JSON.stringify(info)}`);
+  });
+});
+
+test('/title <name> still sets one, and a failed generation sets nothing', async () => {
+  await withAgent(
+    { script: [{ kind: 'text', text: 'the answer' }], titleScript: [] },
+    async ({ agent, workDir }) => {
+      await boot(agent);
+      const sessionId = await newSession(agent, workDir);
+      await prompt(agent, sessionId, 'please fix the parser bug');
+      // No title script: every generation fails, and nothing is set.
+      const failed = await runCommand(agent, sessionId, '/title');
+      if (!failed.text.includes('Could not generate a title')) {
+        throw new Error(`reply: ${JSON.stringify(failed.text)}`);
+      }
+      await runCommand(agent, sessionId, '/title My Own Title');
       const listed = await agent.request('session/list', {});
       const entry = listed.sessions.find((session) => session.sessionId === sessionId);
       if (entry?.title !== 'My Own Title') throw new Error(`session/list title: ${JSON.stringify(entry?.title)}`);
@@ -1842,139 +1898,6 @@ test('a title the user sets during the first turn is not overwritten by the gene
   );
 });
 
-test('the title arrives while the first turn is still running', async () => {
-  await withAgent(
-    {
-      // The turn answers slowly; the title does not wait for it.
-      script: [{ kind: 'text', text: 'a long answer' }],
-      titleScript: [{ kind: 'text', text: 'Early Title' }],
-      autoSessionTitle: true,
-      delayMs: 3000,
-    },
-    async ({ agent, workDir }) => {
-      await boot(agent);
-      const sessionId = await newSession(agent, workDir);
-      const running = agent.beginRequest(
-        'session/prompt',
-        { sessionId, prompt: [{ type: 'text', text: 'please refactor the parser' }] },
-        60_000,
-      );
-      // The title is published before the turn answers - which is the point:
-      // a client shows it while the agent is still working.
-      await waitFor(
-        () =>
-          updates(agent).some(
-            (update) => update.sessionUpdate === 'session_info_update' && update.title === 'Early Title',
-          ),
-        'the title before turn end',
-        10_000,
-      );
-      if (!agent.pending.has(running.id)) {
-        throw new Error('the turn had already finished; the title did not arrive early');
-      }
-      const answer = await running.promise;
-      if (answer.stopReason !== 'end_turn') throw new Error(`stopReason ${JSON.stringify(answer)}`);
-    },
-  );
-});
-
-test('auto title generation does not call the model when disabled', async () => {
-  await withAgent(
-    { script: [{ kind: 'text', text: 'the answer' }], autoSessionTitle: false },
-    async ({ agent, provider, workDir }) => {
-      await boot(agent);
-      const sessionId = await newSession(agent, workDir);
-      await prompt(agent, sessionId, 'please fix the parser bug');
-      await new Promise((resolvePromise) => setTimeout(resolvePromise, 500));
-      if (provider.requests.length !== 1) {
-        throw new Error(`expected one model request, got ${provider.requests.length}`);
-      }
-      // No adapter-side model call for a title, and no title at all: the
-      // engine's own easy title (the first user line) is a placeholder the
-      // adapter never publishes.
-      const info = updates(agent).filter((update) => update.sessionUpdate === 'session_info_update');
-      if (info.length !== 0) throw new Error(`unexpected title updates: ${JSON.stringify(info)}`);
-    },
-  );
-});
-
-test('a restored session whose only title is the engine placeholder gets a generated one', async () => {
-  const provider = await startFakeProvider({
-    // The cancelled first turn still consumes an entry; the last one is the title.
-    script: [{ kind: 'text', text: 'cancelled answer' }, { kind: 'text', text: 'second answer' }],
-    titleScript: [{ kind: 'text', text: 'Title After Restore' }],
-    delayMs: 1500,
-  });
-  const homeDir = writeFakeHome({ baseUrl: provider.baseUrl, autoSessionTitle: true });
-  const workDir = mkdtempSync(join(tmpdir(), 'kimi-acp-suite-'));
-  const spawn = () => spawnAgent(mainPath, { homeDir, env: { KIMI_ACP_DEBUG: '1' } });
-  let agent = spawn();
-  // Short enough that no title is requested from it, so a cancelled turn
-  // leaves the session with nothing but the engine's placeholder.
-  const firstPrompt = 'hi';
-  try {
-    await boot(agent);
-    const sessionId = await newSession(agent, workDir);
-    // Cancel the first turn before it answers: it never earns a title, so the
-    // engine's placeholder (the first prompt) is all the session has on disk.
-    const cancelled = agent.beginRequest(
-      'session/prompt',
-      { sessionId, prompt: [{ type: 'text', text: firstPrompt }] },
-      60_000,
-    );
-    await waitFor(() => provider.requests.length >= 1, 'the first model request');
-    // Mid-turn the stored title is only the placeholder; the picker must not show it.
-    const during = await agent.request('session/list', {});
-    const row = during.sessions.find((session) => session.sessionId === sessionId);
-    if (row?.title !== undefined) throw new Error(`session/list shows the placeholder: ${JSON.stringify(row?.title)}`);
-    agent.notify('session/cancel', { sessionId });
-    const first = await cancelled.promise;
-    if (first.stopReason !== 'cancelled') throw new Error(`first stopReason ${JSON.stringify(first)}`);
-    await agent.close();
-
-    // A fresh process restores it: the placeholder is not what the client is
-    // shown, and the next completed turn still earns a generated title.
-    agent = spawn();
-    await boot(agent);
-    await agent.request('session/load', { sessionId, cwd: workDir, mcpServers: [] });
-    const loaded = updates(agent).filter((update) => update.sessionUpdate === 'session_info_update');
-    if (loaded.some((update) => update.title === firstPrompt)) {
-      throw new Error(`the placeholder was published on load: ${JSON.stringify(loaded)}`);
-    }
-    await prompt(agent, sessionId, 'and the second prompt');
-    await waitFor(
-      () => updates(agent).some((update) => update.sessionUpdate === 'session_info_update' && update.title === 'Title After Restore'),
-      'the generated title after restore',
-    );
-  } finally {
-    await agent.close();
-    await provider.close();
-    rmSync(homeDir, { recursive: true, force: true });
-    rmSync(workDir, { recursive: true, force: true });
-  }
-});
-
-
-test('a failed title request falls back to the first user line', async () => {
-  await withAgent(
-    // An empty title script makes every title request fail, deterministically.
-    { script: [{ kind: 'text', text: 'the answer' }], titleScript: [], autoSessionTitle: true },
-    async ({ agent, workDir }) => {
-      await boot(agent);
-      const sessionId = await newSession(agent, workDir);
-      await prompt(agent, sessionId, 'please fix the parser bug');
-      await waitFor(
-        () =>
-          updates(agent).some(
-            (update) =>
-              update.sessionUpdate === 'session_info_update' &&
-              update.title === 'please fix the parser bug',
-          ),
-        'the fallback title',
-      );
-    },
-  );
-});
 
 
 test('dropped commands are neither advertised nor callable', async () => {

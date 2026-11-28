@@ -7,7 +7,10 @@
  * module implements the flow as a subcommand and advertises it from
  * `initialize`:
  *
- *   AuthMethod { id: 'login', type: 'terminal', args: ['login'] }
+ *   AuthMethod { id: 'login', type: 'terminal', args: ['--login'] }
+ *
+ * The arguments match the official ACP server, so a client spawns the login in
+ * exactly the same way; `main` accepts both spellings.
  *
  * The flow writes the verification URL and code to stdout, which is what the
  * user needs in the terminal window the client opened.
@@ -25,7 +28,7 @@ export function terminalAuthMethod(): AuthMethod {
     type: 'terminal',
     name: 'Login with Kimi account',
     description: 'Open the device-code login flow in a terminal.',
-    args: ['login'],
+    args: ['--login'],
     env: {},
   };
 }
