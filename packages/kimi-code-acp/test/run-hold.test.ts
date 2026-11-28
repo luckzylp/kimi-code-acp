@@ -448,11 +448,13 @@ describe('a run and the background work its turn started', () => {
     expect(first.reason).toBe('cancelled');
   });
 
-  it('holds a goal run across its continuation turns until the goal stops', async () => {
+  it('holds a goal run across its turns until the goal stops', async () => {
     const { bridge, emit } = bridgeWith();
-    const goal = observe(bridge.awaitGoal() as Promise<string>);
-    // Each continuation turn ends; the goal keeps going, so the run must not.
-    emit(turnStarted(1, { kind: 'system_trigger', name: 'goal_continuation' }));
+    // The objective itself is the goal's first turn, run under the goal's run.
+    const goal = observe(bridge.prompt('ship it', undefined, { goal: true }) as Promise<string>);
+    await sleep(5);
+    // Each turn ends; the goal keeps going, so the run must not.
+    emit(turnStarted(1, { kind: 'user' }, 'prompt_1'));
     emit(turnEnded(1));
     await sleep(5);
     expect(goal.reason).toBeUndefined();
@@ -482,8 +484,9 @@ describe('a run and the background work its turn started', () => {
 
   it('cancelling a goal run pauses the goal and settles cancelled', async () => {
     const { bridge, emit, calls } = bridgeWith();
-    const goal = observe(bridge.awaitGoal() as Promise<string>);
-    emit(turnStarted(1, { kind: 'system_trigger', name: 'goal_continuation' }));
+    const goal = observe(bridge.prompt('ship it', undefined, { goal: true }) as Promise<string>);
+    await sleep(5);
+    emit(turnStarted(1, { kind: 'user' }, 'prompt_1'));
     emit(turnEnded(1));
     await sleep(5);
     bridge.cancel();

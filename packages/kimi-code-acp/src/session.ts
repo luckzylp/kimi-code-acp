@@ -325,21 +325,6 @@ export class SessionBridge {
     });
   }
 
-  /**
-   * Hold a run for a goal the session just started: its continuation turns end
-   * one after another, and the client must keep showing the agent as working
-   * (and offer its stop control) until the goal stops being active.
-   */
-  awaitGoal(): Promise<StopReason> {
-    if (this.run !== undefined && !this.run.settled) {
-      return Promise.reject(new Error('a run is already in progress in this session'));
-    }
-    return new Promise<StopReason>((resolve, reject) => {
-      const run: Run = { resolve, reject, settled: false, goal: true };
-      this.run = run;
-    });
-  }
-
   /** Whether a steered prompt is still waiting for its turn. */
   private hasQueuedRun(): boolean {
     return this.queuedRuns.some((run) => !run.settled);
@@ -477,12 +462,13 @@ export class SessionBridge {
   prompt(
     input: string | readonly PromptPart[],
     skill?: { readonly name: string; readonly args?: string },
+    options: { readonly goal?: boolean } = {},
   ): Promise<StopReason> {
     if (this.run !== undefined && !this.run.settled) {
       return Promise.reject(new Error('a run is already in progress in this session'));
     }
     return new Promise<StopReason>((resolve, reject) => {
-      const run: Run = { resolve, reject, settled: false };
+      const run: Run = { resolve, reject, settled: false, ...(options.goal === true ? { goal: true } : {}) };
       this.run = run;
       const submission =
         skill === undefined

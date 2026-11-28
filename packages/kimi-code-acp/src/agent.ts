@@ -1073,18 +1073,18 @@ export async function prompt(
     }
     if (reply !== null) {
       if (reply.text !== undefined) await entry.bridge.note(reply.text);
-      if (reply.holdsGoal === true) {
-        // The goal runs turns of its own. Keep this prompt open for as long as
-        // the goal is active: the client shows the agent as working (and offers
-        // its stop control) instead of going idle between continuations.
-        const onGoalAbort = (): void => entry.bridge.cancel();
-        signal.addEventListener('abort', onGoalAbort, { once: true });
-        try {
-          const stopReason = await entry.bridge.awaitGoal();
-          return { stopReason };
-        } finally {
-          signal.removeEventListener('abort', onGoalAbort);
-        }
+      if (reply.goal !== undefined) {
+        // The objective is the goal's first turn (the engine adopts the live turn
+        // as the goal's starter), and the goal then drives the turns that follow.
+        // One run carries them all, so the prompt stays open until the goal stops
+        // being active: the client shows the agent as working and keeps its stop
+        // control instead of going idle between continuations.
+        const stopReason = await entry.bridge.prompt(
+          [{ type: 'text', text: reply.goal }],
+          undefined,
+          { goal: true },
+        );
+        return { stopReason };
       }
       if (reply.prompt === undefined) return { stopReason: 'end_turn' };
       parts = [{ type: 'text', text: reply.prompt }];

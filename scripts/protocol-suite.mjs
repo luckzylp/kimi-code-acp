@@ -1709,29 +1709,28 @@ test('/login reports the sign-in state', async () => {
   });
 });
 
-test('/goal keeps the prompt open while the goal runs, and cancel pauses it', async () => {
+test('/goal runs the objective as the goal\'s first turn and keeps the prompt open until cancelled', async () => {
   await withAgent(
     {
-      // The goal continuation turn this replaces: the goal itself is faked by
-      // the first text, so the prompt must stay open across the turn's end.
-      script: [{ kind: 'text', text: 'goal turn' }],
-      delayMs: 200,
+      // The objective is the first turn; every later answer is a continuation.
+      script: Array.from({ length: 6 }, () => ({ kind: 'text', text: 'working on the goal' })),
+      delayMs: 300,
     },
-    async ({ agent, workDir }) => {
+    async ({ agent, provider, workDir }) => {
       await boot(agent);
       const sessionId = await newSession(agent, workDir);
       const goal = agent.beginRequest(
         'session/prompt',
         { sessionId, prompt: [{ type: 'text', text: '/goal ship the parser fix' }] },
-        30_000,
+        60_000,
       );
-      // The goal card is published and the prompt is still open: the client
-      // keeps its stop control instead of going idle between continuations.
-      await waitFor(
-        () => updates(agent).some((update) => update.sessionUpdate === 'agent_message_chunk'),
-        'the goal confirmation',
-      );
-      await new Promise((resolvePromise) => setTimeout(resolvePromise, 500));
+      // The objective reaches the model as the goal's first turn, as in the TUI
+      // and the web client - a goal created alone runs nothing until a turn does.
+      await waitFor(() => provider.requests.length >= 1, 'the goal\'s first turn', 15_000);
+      // Then the goal drives turn after turn on its own, and the prompt stays
+      // open across all of them (the text is split into streamed chunks, hence
+      // the request count rather than one merged message).
+      await waitFor(() => provider.requests.length >= 3, 'continuation turns', 30_000);
       if (!agent.pending.has(goal.id)) throw new Error('the /goal prompt settled while the goal was active');
       agent.notify('session/cancel', { sessionId });
       const answer = await goal.promise;

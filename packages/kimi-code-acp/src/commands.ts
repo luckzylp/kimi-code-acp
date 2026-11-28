@@ -29,8 +29,12 @@ export interface CommandReply {
   readonly text?: string;
   /** A prompt the adapter should submit as a normal turn. */
   readonly prompt?: string;
-  /** The command started (or resumed) a goal: stay busy until it stops running. */
-  readonly holdsGoal?: boolean;
+  /**
+   * The command started (or resumed) a goal: the objective is then submitted as
+   * the goal's first turn (as the TUI and the web client do), and the prompt
+   * stays open until the goal stops running.
+   */
+  readonly goal?: string;
 }
 
 interface SlashCommandSpec {
@@ -86,6 +90,13 @@ const USAGE: SlashCommandSpec = {
   },
 };
 
+/**
+ * `/goal resume` re-activates the goal without starting a turn of its own
+ * (`resumeGoal` continues a paused goal only when a live turn can carry it);
+ * this is the turn, worded as the TUI words a continuation.
+ */
+const GOAL_RESUME_PROMPT = 'Continue working on the goal.';
+
 const GOAL: SlashCommandSpec = {
   name: 'goal',
   description: 'Start or manage the long-running goal',
@@ -102,20 +113,17 @@ const GOAL: SlashCommandSpec = {
       case 'pause':
         return { text: renderGoal(await runtime.session.pauseGoal()) };
       case 'resume':
-        return { text: renderGoal(await runtime.session.resumeGoal()), holdsGoal: true };
+        return { text: renderGoal(await runtime.session.resumeGoal()), goal: GOAL_RESUME_PROMPT };
       case 'cancel':
         return { text: renderGoal(await runtime.session.cancelGoal()) };
       case 'replace': {
         if (objective.length === 0) return { text: 'Usage: /goal replace <objective>' };
-        return {
-          text: renderGoal(await runtime.session.createGoal({ objective, replace: true })),
-          holdsGoal: true,
-        };
+        return { text: renderGoal(await runtime.session.createGoal({ objective, replace: true })), goal: objective };
       }
       default: {
         const text = args.trim();
         if (text.length === 0) return { text: 'Usage: /goal <objective>' };
-        return { text: renderGoal(await runtime.session.createGoal({ objective: text })), holdsGoal: true };
+        return { text: renderGoal(await runtime.session.createGoal({ objective: text })), goal: text };
       }
     }
   },
